@@ -20,3 +20,26 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+# SRRS / Python
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# OS junk files (cross-platform)
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# SRRS generated artifacts
+data/
+chroma_db/
+*.npy
+*.log
