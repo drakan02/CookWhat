@@ -54,30 +54,3 @@ python step3_vector_database.py search "món ăn nhẹ từ cá" --n 5
 python step3_vector_database.py search "phở bò" --n 3 --ingredient "gầu bò"
 python step3_vector_database.py search "món miền Nam" --location "Hồ Chí Minh"
 ```
-
-## Dữ liệu đầu vào gợi ý
-
-File recipes hỗ trợ:
-
-- JSONL (mỗi dòng là 1 object)
-- JSON array
-
-Một bản ghi mẫu:
-
-```json
-{
-  "id": "123",
-  "title": "Canh chua cá",
-  "description": "Món canh chua miền Nam",
-  "cook_time": "30 phút",
-  "servings": "4 người",
-  "ner": ["cá", "cà chua", "dứa"],
-  "ingredients": ["300g cá", "2 quả cà chua"],
-  "steps": [{"text": "Sơ chế nguyên liệu"}, {"text": "Nấu canh"}]
-}
-```
-
-## Gợi ý khi push GitHub
-
-- Không commit thư mục `data/` và `chroma_db/` vì đây là artifact sinh ra khi chạy.
-- Nếu muốn chia sẻ dữ liệu mẫu, tạo file nhỏ trong `data/sample/` và bỏ rule ignore tương ứng.
