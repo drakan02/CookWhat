@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,27 +8,57 @@ import chromadb
 import numpy as np
 from chromadb.config import Settings
 
-from step2_embedding import encode_query
 
-
-EMBEDDINGS_DIR = "data/embeddings"
-CHROMA_PATH = "./chroma_db"
+EMBEDDINGS_DIR = "/kaggle/working/data/embeddings"
+CHROMA_PATH = "/kaggle/working/chroma_db"
 COLLECTION_NAME = "vietnamese_recipes"
 INGEST_BATCH = 512
-DEFAULT_EMBED_BACKEND = "ollama"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_OLLAMA_MODEL = "bge-m3:567m"
-DEFAULT_HF_MODEL = "BAAI/bge-m3"
+DEFAULT_MODEL = "BAAI/bge-m3"
+DEFAULT_DEVICE = "auto"
+
+_ENCODER_CACHE: dict[tuple[str, str], object] = {}
+
+
+def _resolve_device(device: str) -> str:
+    if device != "auto":
+        return device
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def encode_query(query: str, model: str = DEFAULT_MODEL, device: str = DEFAULT_DEVICE) -> np.ndarray:
+    key = (model, _resolve_device(device))
+    encoder = _ENCODER_CACHE.get(key)
+
+    if encoder is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Thieu package sentence-transformers. Hay cai: pip install sentence-transformers"
+            ) from exc
+
+        encoder = SentenceTransformer(model, device=key[1])
+        _ENCODER_CACHE[key] = encoder
+
+    vector = encoder.encode(
+        [query],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )[0]
+    return np.asarray(vector, dtype=np.float32)
 
 
 @dataclass
 class StoreConfig:
     chroma_path: str = CHROMA_PATH
     collection_name: str = COLLECTION_NAME
-    embed_backend: str = DEFAULT_EMBED_BACKEND
-    embed_model: str = DEFAULT_OLLAMA_MODEL
-    ollama_url: str = DEFAULT_OLLAMA_URL
-    device: str = "auto"
+    model: str = DEFAULT_MODEL
+    device: str = DEFAULT_DEVICE
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -58,7 +89,7 @@ class RecipeVectorStore:
         if reset:
             try:
                 self.client.delete_collection(self.config.collection_name)
-                print(f"[vectordb] Đã reset collection: {self.config.collection_name}")
+                print(f"[vectordb] Reset collection: {self.config.collection_name}")
             except Exception:
                 pass
         return self.client.get_or_create_collection(
@@ -77,7 +108,7 @@ class RecipeVectorStore:
 
         for file_path in [emb_path, ids_path, docs_path]:
             if not file_path.exists():
-                raise FileNotFoundError(f"Thiếu file đầu vào: {file_path}")
+                raise FileNotFoundError(f"Thieu file dau vao: {file_path}")
 
         vectors = np.load(str(emb_path))
         ids = json.loads(ids_path.read_text(encoding="utf-8"))
@@ -85,12 +116,12 @@ class RecipeVectorStore:
 
         if not (len(vectors) == len(ids) == len(chunks)):
             raise ValueError(
-                f"Số lượng không khớp embeddings={len(vectors)}, ids={len(ids)}, chunks={len(chunks)}"
+                f"So luong khong khop embeddings={len(vectors)}, ids={len(ids)}, chunks={len(chunks)}"
             )
 
         collection = self._collection_for_ingest(reset=reset)
         total = len(ids)
-        print(f"[vectordb] Bắt đầu ingest {total} documents")
+        print(f"[vectordb] Ingest {total} documents")
 
         for start in range(0, total, INGEST_BATCH):
             end = min(start + INGEST_BATCH, total)
@@ -102,7 +133,7 @@ class RecipeVectorStore:
             )
             print(f"[vectordb] Ingested {end}/{total}")
 
-        print(f"[vectordb] Hoàn thành, tổng documents: {collection.count()}")
+        print(f"[vectordb] Done. total docs: {collection.count()}")
 
     def search(
         self,
@@ -114,13 +145,10 @@ class RecipeVectorStore:
         collection = self._collection_for_search()
         query_vector = encode_query(
             query,
-            backend=self.config.embed_backend,
-            model=self.config.embed_model,
-            ollama_url=self.config.ollama_url,
+            model=self.config.model,
             device=self.config.device,
         ).tolist()
 
-        # Lấy dư ứng viên để filter mềm phía Python, tránh phụ thuộc operator của Chroma.
         raw_limit = max(n_results * 5, n_results)
         results = collection.query(
             query_embeddings=[query_vector],
@@ -175,18 +203,14 @@ def search(
     filter_location: str | None = None,
     chroma_path: str = CHROMA_PATH,
     collection_name: str = COLLECTION_NAME,
-    embed_backend: str = DEFAULT_EMBED_BACKEND,
-    embed_model: str = DEFAULT_OLLAMA_MODEL,
-    ollama_url: str = DEFAULT_OLLAMA_URL,
-    device: str = "auto",
+    model: str = DEFAULT_MODEL,
+    device: str = DEFAULT_DEVICE,
 ) -> list[dict]:
     store = RecipeVectorStore(
         StoreConfig(
             chroma_path=chroma_path,
             collection_name=collection_name,
-            embed_backend=embed_backend,
-            embed_model=embed_model,
-            ollama_url=ollama_url,
+            model=model,
             device=device,
         )
     )
@@ -199,29 +223,49 @@ def search(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingest và search recipe vectors bằng ChromaDB")
+    parser = argparse.ArgumentParser(description="Kaggle Chroma ingest/search")
     subparsers = parser.add_subparsers(dest="command")
 
-    p_ingest = subparsers.add_parser("ingest", help="Nạp embeddings vào ChromaDB")
+    p_ingest = subparsers.add_parser("ingest", help="Nap embeddings vao ChromaDB")
     p_ingest.add_argument("--embeddings-dir", default=EMBEDDINGS_DIR)
     p_ingest.add_argument("--chroma-path", default=CHROMA_PATH)
     p_ingest.add_argument("--collection-name", default=COLLECTION_NAME)
     p_ingest.add_argument("--reset", action="store_true")
 
-    p_search = subparsers.add_parser("search", help="Tìm kiếm recipe")
+    p_search = subparsers.add_parser("search", help="Tim kiem recipe")
     p_search.add_argument("query")
     p_search.add_argument("--n", type=int, default=5)
     p_search.add_argument("--ingredient", default=None)
     p_search.add_argument("--location", default=None)
     p_search.add_argument("--chroma-path", default=CHROMA_PATH)
     p_search.add_argument("--collection-name", default=COLLECTION_NAME)
-    p_search.add_argument("--backend", choices=["ollama", "hf"], default=DEFAULT_EMBED_BACKEND)
-    p_search.add_argument("--model", default=None,
-                          help="Mặc định: bge-m3:567m (ollama) hoặc BAAI/bge-m3 (hf)")
-    p_search.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
-    p_search.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    p_search.add_argument("--model", default=DEFAULT_MODEL)
+    p_search.add_argument("--device", choices=["auto", "cpu", "cuda"], default=DEFAULT_DEVICE)
 
-    args = parser.parse_args()
+    # Strip kernel-injected args such as: -f /tmp/<id>.json and HistoryManager flags.
+    raw_args = sys.argv[1:]
+    cleaned_args: list[str] = []
+    skip_next = False
+    for idx, token in enumerate(raw_args):
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "-f":
+            skip_next = True
+            continue
+        if token.startswith("--HistoryManager"):
+            continue
+        if idx > 0 and raw_args[idx - 1] == "-f":
+            continue
+        cleaned_args.append(token)
+
+    # Avoid argparse SystemExit in notebook cells when no subcommand is passed.
+    if not cleaned_args or cleaned_args[0] not in {"ingest", "search"}:
+        print("[vectordb] No CLI command provided. Use 'ingest' or 'search' when running as script.")
+        print("[vectordb] Example: !python kaggle_step3_vector_database.py ingest --reset")
+        raise SystemExit(0)
+
+    args, _ = parser.parse_known_args(cleaned_args)
 
     if args.command == "ingest":
         ingest(
@@ -231,7 +275,6 @@ if __name__ == "__main__":
             reset=args.reset,
         )
     elif args.command == "search":
-        selected_model = args.model or (DEFAULT_HF_MODEL if args.backend == "hf" else DEFAULT_OLLAMA_MODEL)
         rows = search(
             query=args.query,
             n_results=args.n,
@@ -239,18 +282,16 @@ if __name__ == "__main__":
             filter_location=args.location,
             chroma_path=args.chroma_path,
             collection_name=args.collection_name,
-            embed_backend=args.backend,
-            embed_model=selected_model,
-            ollama_url=args.ollama_url,
+            model=args.model,
             device=args.device,
         )
-        print(f"\nCâu hỏi: {args.query}")
-        print(f"Top {len(rows)} kết quả:\n")
+        print(f"\nQuery: {args.query}")
+        print(f"Top {len(rows)} results:\n")
         for row in rows:
             print(f"{'-' * 60}")
             print(f"#{row['rank']} [{row['score']:.4f}] {row['title']}")
             print(f"  URL: {row['url']}")
-            print(f"  Nấu: {row['cook_time']}")
+            print(f"  Time: {row['cook_time']}")
             print(f"  NER: {row['ner']}")
     else:
         parser.print_help()
