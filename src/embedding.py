@@ -26,12 +26,12 @@ def check_ollama_connection() -> None:
         resp.raise_for_status()
         models = [m["name"] for m in resp.json().get("models", [])]
 
-        available = [m.split(":")[0] for m in models]
-        if OLLAMA_MODEL not in available:
+        # available = [m.split(":")[0] for m in models]
+        if OLLAMA_MODEL not in models:
             raise RuntimeError(
                 f"Model '{OLLAMA_MODEL}' chưa được pull.\n"
                 f"Chạy: ollama pull {OLLAMA_MODEL}\n"
-                f"Các model hiện có: {available}"
+                f"Các model hiện có: {models}"
             )
         print(f"[embedding] Ollama OK — model '{OLLAMA_MODEL}' sẵn sàng.")
     except requests.exceptions.ConnectionError:

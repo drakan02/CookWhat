@@ -5,7 +5,7 @@ from pathlib import Path
 import chromadb
 from chromadb.config import Settings
 
-from embedding import encode_query
+from src.embedding import encode_query
 
 # ---------- Configuration ----------
 CHROMA_PATH = "./chroma_db"       # thư mục lưu ChromaDB persistent

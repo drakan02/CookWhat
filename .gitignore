@@ -3,3 +3,12 @@
 *.log
 
 data/data.jsonl
+
+data/chunks.jsonl
+data/embeddings/embeddings.npy
+data/embeddings/documents.jsonl
+data/embeddings/ids.json
+
+chroma_db/
+
+__pycache__/

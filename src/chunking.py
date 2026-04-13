@@ -116,7 +116,7 @@ if __name__ == "__main__":
     import argparse
  
     parser = argparse.ArgumentParser(description="Chunk recipe JSON thành text.")
-    parser.add_argument("--input",  default="data/recipes.jsonl",
+    parser.add_argument("--input",  default="data/data.jsonl",
                         help="File JSONL hoặc JSON array đầu vào")
     parser.add_argument("--output", default="data/chunks.jsonl",
                         help="File JSONL chunks đầu ra")
