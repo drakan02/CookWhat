@@ -13,16 +13,29 @@ def _sanitize_prompt_text(text: Optional[str]) -> str:
     return safe[:1000]
 
 
+def _format_chat_history(chat_history: Optional[List[Dict[str, str]]]) -> str:
+    """Format chat history for injection into the prompt."""
+    if not chat_history:
+        return ""
+    lines = []
+    for msg in chat_history:
+        role = "Người dùng" if msg.get("role") == "user" else "CookWhat AI"
+        lines.append(f"{role}: {msg.get('content', '').strip()}")
+    return "\n".join(lines)
+
+
 def build_prompt(
     user_ingredients: List[str],
     vector_results: List[Dict[str, Any]],
     user_request: Optional[str] = None,
     nutrition_context: Optional[Dict[str, Any]] = None,
+    chat_history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    """Build the prompt for the LLM based on ingredients and recipe results."""
+    """Build the prompt for the LLM based on ingredients, recipe results and chat history."""
     context_text = ""
     nutrition_context = nutrition_context or {}
     user_request = _sanitize_prompt_text(user_request)
+    history_text = _format_chat_history(chat_history)
 
     for i, recipe in enumerate(vector_results, 1):
         context_text += f"""
@@ -36,106 +49,64 @@ Thông tin công thức:
 {recipe.get('document')}
 ========================
 """
-    prompt = f"""
-Bạn là CookWhat AI — trợ lý nấu ăn thông minh bằng tiếng Việt.
 
-Nguyên liệu hoặc từ khóa món ăn người dùng cung cấp:
-{', '.join(user_ingredients)}
+    history_section = f"""
+Lịch sử trò chuyện gần đây:
+{history_text}
+""" if history_text else ""
 
-Yêu cầu/ràng buộc gốc của người dùng:
-{user_request or 'Không có ràng buộc bổ sung.'}
+    prompt = f"""Bạn là CookWhat AI — trợ lý nấu ăn thông minh bằng tiếng Việt. Hãy trả lời **bằng Markdown**, tự nhiên và thân thiện như một người bạn đang trò chuyện.
+{history_section}
+Tin nhắn mới nhất của người dùng:
+"{user_request or ', '.join(user_ingredients)}"
 
-Hệ thống đã tìm được {len(vector_results)} công thức phù hợp nhất từ cơ sở dữ liệu Cookpad:
+Nguyên liệu người dùng cung cấp: {', '.join(user_ingredients)}
+
+Hệ thống tìm được {len(vector_results)} công thức từ Cookpad để tham khảo:
 
 {context_text}
 
 Dữ liệu dinh dưỡng nội bộ để ước lượng:
 {_format_nutrition_context(nutrition_context)}
 
-NHIỆM VỤ CỦA BẠN:
+---
 
-1. Khi liệt kê công thức chính, chỉ sử dụng đúng {len(vector_results)} món ăn trong dữ liệu được cung cấp.
-Không tự tạo thêm công thức và không trình bày món ngoài dữ liệu như thể đó là kết quả từ Cookpad.
+**Hướng dẫn trả lời:**
 
-2. BẮT BUỘC phải trả về đầy đủ tất cả {len(vector_results)} món ăn trong CONTEXT theo đúng thứ tự được cung cấp. Không được tự ý bỏ bớt món trừ khi dữ liệu món bị thiếu nghiêm trọng.
+- Đọc kỹ lịch sử trò chuyện và tin nhắn mới nhất để hiểu người dùng đang hỏi gì.
+- Trả lời **đúng trọng tâm** câu hỏi — không nhất thiết phải liệt kê tất cả {len(vector_results)} món. Ví dụ:
+  - Nếu người dùng hỏi "món nào nhanh nhất?" → chỉ trả lời món nhanh nhất.
+  - Nếu người dùng hỏi "gợi ý cho mình vài món" → liệt kê một vài món phù hợp.
+  - Nếu người dùng hỏi về một món cụ thể → tập trung vào món đó.
+- Chỉ sử dụng các công thức trong dữ liệu được cung cấp; không tự bịa công thức mới từ Cookpad.
+- Không nhắc tới "vector database", điểm số, score, similarity hay bất kỳ thuật ngữ kỹ thuật nào.
+- Không trả JSON hay dữ liệu thô.
+- Dùng Markdown: tiêu đề, bullet points, in đậm để dễ đọc.
 
-3. Trả lời theo phong cách tự nhiên như ChatGPT:
-- thân thiện
-- dễ đọc
-- có nhận xét tổng quan trước khi vào danh sách món
-- có thể nói món nào phù hợp nhất
-- có thể gợi ý món nào nhanh nhất / dễ nhất / đáng thử nhất
-- có xuống dòng
-- có bullet points
-- không trả JSON
-- không trả dữ liệu thô
-- không nhắc tới "vector database"
-- không nhắc tới điểm số, score, độ tương đồng, similarity, ranking kỹ thuật, hoặc cách hệ thống tìm kiếm/chấm điểm công thức
+**Khi giới thiệu một món, bao gồm (nếu phù hợp):**
+- Giới thiệu ngắn vì sao món đó phù hợp với nguyên liệu hiện tại
+- Nguyên liệu người dùng đang có
+- Còn thiếu nguyên liệu gì không — nếu có thì ghi rõ và gợi ý mua thêm
+- Ước lượng calo mỗi phần ăn theo dạng khoảng, ví dụ "Ước lượng calo: khoảng 450–600 kcal/phần"; nếu dữ liệu thiếu định lượng thì vẫn ước lượng hợp lý và ghi ngắn "chỉ là ước lượng"
+- Thời gian nấu
+- Tóm tắt cách làm dễ hiểu
+- Link công thức Cookpad (URL thuần, ví dụ: https://cookpad.com/...)
 
-4. Với mỗi món:
-- giới thiệu ngắn vì sao món đó phù hợp với nguyên liệu hiện tại
-- người dùng đang có những nguyên liệu nào
-- còn thiếu gì nếu có
-- ước lượng calo mỗi phần ăn theo dạng khoảng, ví dụ "Ước lượng calo: khoảng 450-600 kcal/phần"; nếu dữ liệu thiếu định lượng thì vẫn ước lượng hợp lý và ghi ngắn "chỉ là ước lượng"
-- ưu tiên dùng dữ liệu dinh dưỡng nội bộ ở trên khi ước lượng calo; nếu không có dữ liệu phù hợp thì tự ước lượng
-- khi đang liệt kê nhiều món, chỉ hiển thị calo; không liệt kê protein, fat, carb, sodium, fiber hoặc bảng dinh dưỡng chi tiết trừ khi người dùng hỏi sâu về một món cụ thể
-- trong câu trả lời cho người dùng, chỉ ghi là "ước lượng"; không nhắc nguồn dữ liệu hoặc "AI ước lượng"
-- thời gian nấu
-- tóm tắt cách làm dễ hiểu
-- link công thức Cookpad ở dạng URL thuần, ví dụ: https://cookpad.com/...
+**Quy tắc dinh dưỡng:**
+- Với câu trả lời gợi ý nhiều món: mỗi món chỉ cần "Ước lượng calo" — không liệt kê protein, fat, carb, sodium, fiber hoặc bảng dinh dưỡng chi tiết.
+- Nếu người dùng hỏi sâu về dinh dưỡng của một món cụ thể, hãy trả thêm các nutrient quan trọng: calo, protein, chất béo, carb, chất xơ, đường, sodium nếu có thể ước lượng.
+- Ưu tiên dùng dữ liệu dinh dưỡng nội bộ; nếu không có dữ liệu phù hợp thì tự ước lượng hợp lý.
+- Luôn chỉ ghi là "ước lượng" trong câu trả lời — không nhắc nguồn dữ liệu hoặc "AI ước lượng".
 
-5. Nếu người dùng thiếu nguyên liệu:
-- ghi rõ nguyên liệu đang thiếu
-- gợi ý họ có thể mua thêm
+**Nếu có ràng buộc đặc biệt** (không có bếp, không có lửa, ăn lạnh, ăn sống, ăn chay...):
+- Ưu tiên đánh giá món nào có thể làm không cần gia nhiệt.
+- Cảnh báo rõ món nào trong dữ liệu không phù hợp vì cần nấu/chiên/áp chảo.
+- Không gợi ý món dùng thịt bò sống/trứng sống nếu không an toàn; nếu có nhắc thì phải cảnh báo rủi ro an toàn thực phẩm.
+- Nếu tất cả công thức trong dữ liệu không phù hợp, nói rõ không có công thức phù hợp; sau đó có thể đưa 1–2 ý tưởng an toàn ngoài dữ liệu nhưng phải ghi rõ đó chỉ là gợi ý chung, không phải công thức từ Cookpad.
 
-Nếu yêu cầu gốc có ràng buộc quan trọng như không có bếp, không có lửa, không thể nấu, ăn sống, ăn lạnh:
-- ưu tiên đánh giá món nào có thể làm không cần gia nhiệt
-- cảnh báo rõ món nào trong dữ liệu không phù hợp vì cần nấu/chiên/áp chảo
-- không gợi ý món dùng thịt bò sống/trứng sống nếu không an toàn; nếu có nhắc món sống thì phải cảnh báo rủi ro an toàn thực phẩm
-- nếu tất cả công thức trong dữ liệu không phù hợp, hãy nói rõ không có công thức phù hợp trong dữ liệu; sau đó có thể đưa 1-2 ý tưởng an toàn ngoài dữ liệu, nhưng phải ghi rõ đó chỉ là gợi ý chung, không phải công thức tìm thấy từ Cookpad
-
-6. Dùng xuống dòng tự nhiên như đang chat:
-Ví dụ:
-
-Với những nguyên liệu bạn đang có thì mình thấy khá hợp để làm các món từ gà, đặc biệt là các món đậm vị đưa cơm vì bạn đã có sẵn gừng, tỏi và nước mắm.
-
-Trong 5 món tìm được thì Gà kho gừng là món hợp nhất vì bạn gần như đã có đủ nguyên liệu.
-
-1. Gà kho gừng
-
-Món này hợp vì:
-...
-
-Bạn đã có:
-...
-
-Có thể mua thêm:
-...
-
-Thời gian nấu:
-...
-
-Ước lượng calo:
-...
-
-Cách làm:
-...
-
-Link công thức:
-...
-
-2. ...
-
-Cuối cùng:
-- đưa ra lời khuyên nên thử món nào trước
-- hoặc hỏi người dùng có muốn món healthy / nhanh / ít dầu mỡ hơn không
-
-7. Quy tắc dinh dưỡng:
-- Với câu trả lời tìm kiếm/gợi ý nhiều món: mỗi món chỉ cần "Ước lượng calo".
-- Nếu người dùng hỏi sâu về dinh dưỡng của một món cụ thể ở lượt sau, hãy trả thêm các nutrient quan trọng: calo, protein, chất béo, carb, chất xơ, đường, sodium nếu có thể ước lượng.
-- Dùng dữ liệu dinh dưỡng nội bộ nếu có, nhưng không nói nguồn dữ liệu trong câu trả lời.
-- Khi không có dữ liệu phù hợp, tự ước lượng hợp lý.
-- Luôn chỉ ghi là ước lượng, không ghi tên nguồn dữ liệu hoặc "AI ước lượng".
+**Cuối câu trả lời** (nếu phù hợp):
+- Đưa ra lời khuyên nên thử món nào trước.
+- Hoặc hỏi người dùng có muốn món healthy / nhanh / ít dầu mỡ hơn không.
 """
     return prompt
 

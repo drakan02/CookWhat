@@ -514,12 +514,14 @@ def chat(request: ChatRequest):
 
         remember_context(session_id, ingredients, vector_results)
         nutrition_context = get_nutrition_context(ingredients, vector_results)
+        history = chat_history_memory.get(session_id, [])[-10:]
 
         prompt = build_prompt(
             user_ingredients=ingredients,
             vector_results=vector_results,
             user_request=user_message,
             nutrition_context=nutrition_context,
+            chat_history=history,
         )
         return stream_chat_response(session_id, call_llm_stream(prompt), "recipe_search")
     elif intent == "FOLLOW_UP":
@@ -599,12 +601,14 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
             ingredients = [user_message]
             remember_context(session_id, ingredients, vector_results)
             nutrition_context = get_nutrition_context(ingredients, vector_results)
+            history = chat_history_memory.get(session_id, [])[-10:]
 
             prompt = build_prompt(
                 user_ingredients=ingredients,
                 vector_results=vector_results,
                 user_request=user_message,
                 nutrition_context=nutrition_context,
+                chat_history=history,
             )
 
             return stream_chat_response(session_id, call_llm_stream(prompt), "recipe_search")
@@ -629,12 +633,14 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
 
         remember_context(session_id, previous_ingredients, vector_results)
         nutrition_context = get_nutrition_context(previous_ingredients, vector_results)
+        history = chat_history_memory.get(session_id, [])[-10:]
 
         prompt = build_prompt(
             user_ingredients=previous_ingredients,
             vector_results=vector_results,
             user_request=user_message,
             nutrition_context=nutrition_context,
+            chat_history=history,
         )
         return stream_chat_response(session_id, call_llm_stream(prompt), "recipe_search")
 
@@ -674,12 +680,14 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
 
         remember_context(session_id, merged_ingredients, vector_results)
         nutrition_context = get_nutrition_context(merged_ingredients, vector_results)
+        history = chat_history_memory.get(session_id, [])[-10:]
 
         prompt = build_prompt(
             user_ingredients=merged_ingredients,
             vector_results=vector_results,
             user_request=user_message,
             nutrition_context=nutrition_context,
+            chat_history=history,
         )
         return stream_chat_response(session_id, call_llm_stream(prompt), "recipe_search")
     elif intent == "SMALL_TALK":
