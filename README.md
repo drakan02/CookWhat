@@ -322,6 +322,94 @@ data/embeddings/
 chroma_db/
 ```
 
+## BM25 Index và Reranker
+
+Ứng dụng dùng **hybrid retrieval** kết hợp:
+- **Dense search**: ChromaDB + BGE-M3 embeddings
+- **Sparse search**: BM25 full-text search
+- **Reranker**: Cross-encoder BAAI/bge-reranker-v2-m3 để xếp hạng lại kết quả
+- **RRF**: Reciprocal Rank Fusion để merge kết quả từ dense + sparse
+
+### Cài đặt dependencies
+
+Dependencies cho BM25 và reranker đã có trong `requirements.txt`:
+
+```text
+rank-bm25==0.2.2        # BM25 sparse search
+sentence-transformers   # Cross-encoder reranker
+```
+
+Nếu chưa cài, chạy:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Build BM25 Index
+
+BM25 index được build từ `data/embeddings/documents.jsonl` (output của pipeline embedding).
+
+**Bước 1:** Đảm bảo đã chạy pipeline embedding trước (nếu chưa):
+
+Linux/macOS:
+```bash
+chmod +x scripts/run_pipeline.sh
+./scripts/run_pipeline.sh
+```
+
+**Bước 2:** Build BM25 index
+
+Linux/macOS:
+```bash
+python -m scripts.build_bm25
+```
+
+Windows PowerShell:
+```powershell
+.\.venv\Scripts\python.exe -m scripts.build_bm25
+```
+
+Output sẽ được lưu tại:
+```text
+data/bm25/bm25_index.pkl   # BM25 index (pickle)
+data/bm25/bm25_meta.json   # Mapping id → metadata + document
+```
+
+Script sẽ in ra:
+```text
+[bm25] Loaded 1234 documents
+[bm25] Built index with tokenizer: simple_tokenize
+[bm25] Saved index to data/bm25/bm25_index.pkl
+[bm25] Saved metadata to data/bm25/bm25_meta.json
+```
+
+### Kiến trúc Hybrid Retrieval
+
+Sau khi build thành công BM25, backend sẽ tự động dùng hybrid retrieval:
+
+```
+User Query
+  ├─► Dense Search (ChromaDB + BGE-M3)  → top 25 candidates
+  ├─► Sparse Search (BM25)              → top 25 candidates
+  └─► NER Overlap Score                 → bonus signal
+        ↓
+   Reciprocal Rank Fusion (k=60)
+        ↓
+   Merged pool (~50 candidates)
+        ↓
+   Cross-Encoder Rerank (bge-reranker-v2-m3)
+        ↓
+   Final Top-5 Contexts
+```
+
+**Module chính:**
+
+| File | Mục đích |
+| --- | --- |
+| `src/bm25_index.py` | Load + search BM25 index (singleton cache) |
+| `src/reranker.py` | Cross-encoder reranker BAAI/bge-reranker-v2-m3 |
+| `src/retriever.py` | Orchestrator: hybrid search + RRF + rerank |
+
 ## Test nhanh vector search
 
 Windows:
@@ -401,6 +489,9 @@ DATABASE_URL=postgresql://cookwhat:cookwhat_password@localhost:5432/project_name
 | Docker daemon chưa chạy | Mở Docker Desktop rồi chạy lại lệnh Docker |
 | Nút đọc không có tiếng | Kiểm tra `espeak-ng` đã cài chưa; xem log uvicorn có `[TTS] Piper model loaded` không |
 | `TTS model chưa được load` (503) | File model thiếu trong `models/tts/`; chạy lại `git pull` để lấy file model |
+| `FileNotFoundError: Không tìm thấy BM25 index` | Chạy `python -m scripts.build_bm25` |
+| `FileNotFoundError: Không tìm thấy documents.jsonl` | Chạy pipeline embedding: `./scripts/run_pipeline.sh` |
+| Reranker tải lâu lần đầu | Bình thường, download model Hugging Face từ internet. Lần sau nhanh hơn |
 
 ## Ghi chú bảo mật
 
