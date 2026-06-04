@@ -74,7 +74,7 @@ brew install espeak-ng
 
 Windows:
 
-Tải installer từ https://github.com/espeak-ng/espeak-ng/releases và chạy file `.msi`.
+Tải installer từ <https://github.com/espeak-ng/espeak-ng/releases> và chạy file `.msi`.
 
 ## Cài đặt Python
 
@@ -196,6 +196,7 @@ Chạy FastAPI:
 
 ```powershell
 .\.venv\Scripts\uvicorn.exe main:app --host 127.0.0.1 --port 8000 --reload
+# uvicorn main:app --host 127.0.0.1 --port 8000 --reload # for macos
 ```
 
 Mở UI:
