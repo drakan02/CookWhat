@@ -192,6 +192,8 @@ Khởi động PostgreSQL trước nếu muốn lưu lịch sử:
 docker compose up -d postgres
 ```
 
+Khởi động Ollama.
+
 Chạy FastAPI:
 
 ```powershell
