@@ -537,39 +537,55 @@ def chat(request: ChatRequest):
 
         previous_recipes = previous_context["recipes"]
         recipe_context = build_recipe_context(previous_recipes)
+        history = chat_history_memory.get(session_id, [])[-10:]
+
+        # Format lịch sử chat cho follow-up prompt
+        history_lines = []
+        for msg in history:
+            role = "Người dùng" if msg.get("role") == "user" else "CookWhat AI"
+            content = msg.get("content", "").strip()
+            if len(content) > 500:
+                content = content[:500] + "..."
+            history_lines.append(f"{role}: {content}")
+        history_text = "\n".join(history_lines)
+
+        history_section = f"""
+Lịch sử trò chuyện gần đây:
+{history_text}
+""" if history_text else ""
 
         followup_prompt = f"""
-Bạn là CookWhat AI.
-
+Bạn là CookWhat AI — trợ lý nấu ăn thông minh bằng tiếng Việt.
+{history_section}
 Người dùng hiện có nguyên liệu:
 {", ".join(previous_ingredients)}
 
 Các món đã gợi ý:
 {recipe_context}
 
-User hỏi tiếp:
+Tin nhắn mới nhất của người dùng:
 "{user_message}"
 
-Hãy trả lời tự nhiên như ChatGPT bằng tiếng Việt.
-Khi nhắc tới món nào:
-- luôn ghi rõ tên món
-- luôn kèm Link công thức của món đó
-- có xuống dòng 
-- có bullet points
+Hãy trả lời **bằng Markdown**, tự nhiên và thân thiện.
+
+**Hướng dẫn trả lời:**
+- Đọc kỹ lịch sử trò chuyện và tin nhắn mới nhất để hiểu người dùng đang hỏi gì.
+- Trả lời đúng trọng tâm câu hỏi.
+- Khi nhắc tới món nào:
+  - luôn ghi rõ tên món
+  - luôn kèm Link công thức của món đó
+  - có xuống dòng
+  - có bullet points
 
 Ví dụ:
-- Gà chiên nước mắm
-Link công thức: https://...
+- **Gà chiên nước mắm**
+  Link công thức: https://...
 
-- Gà hấp gừng
-Link công thức: https://...
+- **Gà hấp gừng**
+  Link công thức: https://...
 
 Nếu user hỏi:
-- món nào healthy hơn
-- món nào nhanh hơn
-- món nào dễ hơn
-
-=> chỉ phân tích trên danh sách món hiện có.
+- món nào healthy hơn / nhanh hơn / dễ hơn → chỉ phân tích trên danh sách món hiện có.
 
 Nếu user hỏi sâu về dinh dưỡng/calo/macro/protein/chất béo/carb của một món cụ thể:
 - trả lời tập trung vào món đó
@@ -581,8 +597,11 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
 """
         return stream_chat_response(session_id, call_llm_stream(followup_prompt), "follow_up")
     elif intent == "RESEARCH":
+        history = chat_history_memory.get(session_id, [])[-10:]
+
         if not previous_context:
             debug_log("Recipe search query", user_message)
+
             try:
                 vector_results = search(query=user_message, ingredients=[], top_k=request.top_k)
             except Exception as exc:
@@ -601,7 +620,6 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
             ingredients = [user_message]
             remember_context(session_id, ingredients, vector_results)
             nutrition_context = get_nutrition_context(ingredients, vector_results)
-            history = chat_history_memory.get(session_id, [])[-10:]
 
             prompt = build_prompt(
                 user_ingredients=ingredients,
@@ -617,7 +635,7 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
 
         debug_log("Research query", new_query)
         try:
-            vector_results = search(query=new_query,ingredients=previous_ingredients, top_k=request.top_k)
+            vector_results = search(query=new_query, ingredients=previous_ingredients, top_k=request.top_k)
         except Exception as exc:
             return search_error_response(session_id, exc)
 
@@ -633,7 +651,6 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
 
         remember_context(session_id, previous_ingredients, vector_results)
         nutrition_context = get_nutrition_context(previous_ingredients, vector_results)
-        history = chat_history_memory.get(session_id, [])[-10:]
 
         prompt = build_prompt(
             user_ingredients=previous_ingredients,
@@ -691,13 +708,28 @@ hãy nói rõ lý do và đưa giải pháp thay thế.
         )
         return stream_chat_response(session_id, call_llm_stream(prompt), "recipe_search")
     elif intent == "SMALL_TALK":
-        prompt = f"""
-Bạn là CookWhat AI.
+        history = chat_history_memory.get(session_id, [])[-6:]
+        history_lines = []
+        for msg in history:
+            role = "Người dùng" if msg.get("role") == "user" else "CookWhat AI"
+            content = msg.get("content", "").strip()
+            if len(content) > 200:
+                content = content[:200] + "..."
+            history_lines.append(f"{role}: {content}")
+        history_text = "\n".join(history_lines)
 
-User nói:
+        history_section = f"""
+Lịch sử trò chuyện gần đây:
+{history_text}
+""" if history_text else ""
+
+        prompt = f"""
+Bạn là CookWhat AI — trợ lý nấu ăn thông minh bằng tiếng Việt.
+{history_section}
+Tin nhắn mới nhất của người dùng:
 "{user_message}"
 
-Hãy trả lời thân thiện như chatbot.
+Hãy trả lời thân thiện, tự nhiên. Đọc lịch sử trò chuyện để trả lời phù hợp ngữ cảnh.
 Nếu user cảm ơn thì đáp lại lịch sự.
 Nếu user chào thì chào lại.
 """

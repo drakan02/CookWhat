@@ -11,10 +11,42 @@ services:
     volumes:
       - cookwhat_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cookwhat -d cookwhat"]
+      test: [ "CMD-SHELL", "pg_isready -U cookwhat -d cookwhat" ]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  app:
+    build: .
+    container_name: cookwhat-app
+    volumes:
+      - .:/app # live reload code
+      - /app/.venv # anonymous volume to prevent host's .venv from overwriting container
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://cookwhat:cookwhat_password@postgres:5432/cookwhat
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  scheduler:
+    build: .
+    container_name: cookwhat-scheduler
+    volumes:
+      - .:/app # live reload code
+      - /app/.venv
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://cookwhat:cookwhat_password@postgres:5432/cookwhat
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: /bin/bash scripts/start_scheduler.sh
 
 volumes:
   cookwhat_postgres_data:
