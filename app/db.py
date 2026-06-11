@@ -74,6 +74,19 @@ def init_db() -> None:
                     ON chat_messages(session_id, created_at, id)
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS raw_recipes (
+                        id TEXT PRIMARY KEY,
+                        url TEXT NOT NULL,
+                        title TEXT,
+                        raw_data JSONB NOT NULL,
+                        is_indexed BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
         _db_ready = True
     except Exception:
         _db_ready = False
@@ -311,3 +324,94 @@ def update_session(
     except Exception:
         _disable_on_error("update_session")
         return False
+
+
+def upsert_raw_recipe(
+    recipe_id: str,
+    url: str,
+    title: Optional[str],
+    raw_data: Dict[str, Any],
+) -> None:
+    if not _is_ready_cached():
+        return
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO raw_recipes (id, url, title, raw_data, updated_at)
+                    VALUES (%s, %s, %s, %s::jsonb, NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        url = EXCLUDED.url,
+                        title = EXCLUDED.title,
+                        raw_data = EXCLUDED.raw_data,
+                        is_indexed = FALSE, -- Reset index status when updated
+                        updated_at = NOW()
+                    """,
+                    (recipe_id, url, title, json.dumps(raw_data)),
+                )
+    except Exception:
+        _disable_on_error("upsert_raw_recipe")
+
+
+def get_unindexed_recipes() -> List[Dict[str, Any]]:
+    if not _is_ready_cached():
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT raw_data
+                    FROM raw_recipes
+                    WHERE is_indexed = FALSE
+                    """
+                )
+                rows = cur.fetchall()
+                return [row["raw_data"] for row in rows]
+    except Exception:
+        _disable_on_error("get_unindexed_recipes")
+        return []
+
+
+def mark_recipes_as_indexed(recipe_ids: List[str]) -> None:
+    if not _is_ready_cached() or not recipe_ids:
+        return
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE raw_recipes
+                    SET is_indexed = TRUE,
+                        updated_at = NOW()
+                    WHERE id = ANY(%s)
+                    """,
+                    (recipe_ids,),
+                )
+    except Exception:
+        _disable_on_error("mark_recipes_as_indexed")
+
+
+def get_all_indexed_recipes() -> List[Dict[str, Any]]:
+    if not _is_ready_cached():
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT raw_data
+                    FROM raw_recipes
+                    WHERE is_indexed = TRUE
+                    """
+                )
+                rows = cur.fetchall()
+                return [row["raw_data"] for row in rows]
+    except Exception:
+        _disable_on_error("get_all_indexed_recipes")
+        return []
