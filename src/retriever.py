@@ -177,8 +177,9 @@ def hybrid_search(
     )
     print(f"[retriever] Sau fusion: {len(fused)} unique candidates")
 
-    # --- Bước 4: Rerank top-25 (giới hạn để tiết kiệm CPU) ---
-    candidates_for_rerank = fused[:(SPARSE_CANDIDATES+DENSE_CANDIDATES)//2]
+    # --- Bước 4: Rerank top-k ---
+    num_rerank = min(len(fused), (SPARSE_CANDIDATES+DENSE_CANDIDATES)//2)
+    candidates_for_rerank = fused[:num_rerank]
     print(f"[retriever] Reranking {len(candidates_for_rerank)} candidates...")
     final_results = rerank(
         query=query,
