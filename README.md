@@ -411,7 +411,25 @@ Nếu chưa cài, chạy:
 python -m pip install -r requirements.txt
 ```
 
-### Build BM25 Index
+### Cách tải BM25 Index & Embeddings đã build sẵn (Khuyên dùng)
+
+Để chatbot chạy ổn định và tránh tốn kém chi phí/tài nguyên khi chạy full pipeline embedding trên máy local, bạn có thể tải trực tiếp các file prebuilt từ Google Drive:
+
+Linux/macOS hoặc Git Bash:
+
+```bash
+chmod +x scripts/download_pipeline_files.sh
+./scripts/download_pipeline_files.sh
+```
+
+Script sẽ tự động kiểm tra và tải các file `bm25_index.pkl`, `bm25_meta.json`, `chunks.jsonl`, `documents.jsonl`, và `embeddings.npy` rồi đặt vào chính xác các thư mục tương ứng.
+
+Mặc định, script chỉ tải khi file chưa tồn tại. Để tải lại và ghi đè các file hiện tại:
+```bash
+./scripts/download_pipeline_files.sh --force
+```
+
+### Build BM25 Index thủ công
 
 BM25 index được build từ `data/embeddings/documents.jsonl` (output của pipeline embedding).
 

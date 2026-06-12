@@ -10,3 +10,4 @@ psycopg[binary]
 piper-tts
 python-multipart
 rank-bm25==0.2.2
+gdown
