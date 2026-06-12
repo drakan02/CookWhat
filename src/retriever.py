@@ -22,8 +22,8 @@ from src.reranker   import rerank
 from src.vectordb   import search as dense_search
 
 # ---------- Config ----------
-DENSE_CANDIDATES  = 25   # số candidates lấy từ dense search
-SPARSE_CANDIDATES = 25   # số candidates lấy từ BM25
+DENSE_CANDIDATES  = 7   # số candidates lấy từ dense search
+SPARSE_CANDIDATES = 7   # số candidates lấy từ BM25
 RRF_K             = 60   # hằng số RRF, thường dùng 60
 NER_BONUS_WEIGHT  = 0.3  # trọng số của NER overlap bonus
 
@@ -177,8 +177,9 @@ def hybrid_search(
     )
     print(f"[retriever] Sau fusion: {len(fused)} unique candidates")
 
-    # --- Bước 4: Rerank top-25 (giới hạn để tiết kiệm CPU) ---
-    candidates_for_rerank = fused[:25]
+    # --- Bước 4: Rerank top-k ---
+    num_rerank = min(len(fused), (SPARSE_CANDIDATES+DENSE_CANDIDATES)//2)
+    candidates_for_rerank = fused[:num_rerank]
     print(f"[retriever] Reranking {len(candidates_for_rerank)} candidates...")
     final_results = rerank(
         query=query,
