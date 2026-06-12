@@ -1,18 +1,16 @@
-# CookWhat
+# CookWhat - Less thinking, more cooking
 
-CookWhat là ứng dụng gợi ý món ăn bằng tiếng Việt. Người dùng nhập các nguyên liệu đang có, hệ thống tìm công thức liên quan trong ChromaDB, dùng LLM để trả lời tự nhiên như chatbot, và lưu lịch sử trò chuyện vào PostgreSQL.
+CookWhat là ứng dụng gợi ý món ăn bằng tiếng Việt. Người dùng nhập các nguyên liệu đang có, hệ thống tìm công thức liên quan trong cơ sở dữ liệu, dùng LLM để trả lời, và lưu lịch sử trò chuyện vào PostgreSQL.
 
 ## Tính năng
 
-- Giao diện chat web tương tự ChatGPT.
+- Giao diện chat web hiện đại, tự nhiên.
 - Gợi ý món ăn dựa trên nguyên liệu người dùng nhập.
-- Hỏi tiếp trong cùng một hội thoại, ví dụ món nào nhanh hơn, healthy hơn, dễ làm hơn.
 - Tìm lại món theo yêu cầu mới, ví dụ món Nhật, món Hàn, món hấp, món ít calo.
 - Thêm nguyên liệu vào ngữ cảnh hiện tại.
 - **Text-to-Speech (TTS) offline** — đọc phản hồi bằng giọng Việt qua Piper TTS.
 - Lưu lịch sử chat vào PostgreSQL.
-- Fallback sang bộ nhớ tạm nếu PostgreSQL chưa được cấu hình.
-- Tìm kiếm công thức bằng ChromaDB và sentence embedding.
+- Tìm kiếm công thức bằng cơ chế truy xuất nhiều bước.
 
 ## Kiến trúc
 
@@ -55,6 +53,56 @@ docker-compose.yml      PostgreSQL local bằng Docker
 - **`espeak-ng`** — system dependency bắt buộc cho Piper TTS (xem hướng dẫn bên dưới).
 - Ollama đang chạy với model embedding `bge-m3:567m` để encode query khi tìm kiếm.
 - Vietnamese ingredients CSV trong thư mục `data/Vietnamese_ingredients.csv` cho dinh dưỡng lookup.
+
+## Chạy ứng dụng bằng Docker (Recommended)
+
+Bạn có thể chạy toàn bộ ứng dụng bao gồm FastAPI app, PostgreSQL database và scheduler thông qua Docker Compose mà không cần cài đặt Python hay `espeak-ng` trực tiếp trên máy của mình.
+
+### Chuẩn bị trước khi chạy
+
+1. Đảm bảo Docker Desktop đang chạy.
+2. Đã cấu hình file `.env`.
+3. Đảm bảo Ollama đang chạy trên máy host và đã tải model embedding:
+
+   ```bash
+   ollama pull bge-m3:567m
+   ```
+
+4. Tải dữ liệu ChromaDB có sẵn hoặc build dữ liệu mới (xem hướng dẫn ở mục [ChromaDB và dữ liệu công thức](#chromadb-và-dữ-liệu-công-thức) bên dưới).
+5. Chuẩn bị index BM25 và các file dữ liệu (nếu chưa có):
+   - **Khuyên dùng (Tải sẵn từ Google Drive)**: Chạy script sau để tải nhanh index BM25 và các file embeddings đã build sẵn:
+     - Linux/macOS:
+
+       ```bash
+       chmod +x scripts/download_pipeline_files.sh
+       ./scripts/download_pipeline_files.sh
+       ```
+
+     - Windows:
+
+       ```powershell
+       python scripts/download_pipeline_files.py
+       ```
+
+   - **Hoặc build thủ công** (nếu muốn tự build): Xem mục [Build BM25 Index thủ công](#build-bm25-index-thủ-công).
+
+### Khởi động ứng dụng
+
+Chạy lệnh sau tại thư mục gốc của dự án:
+
+```bash
+docker compose up --build -d
+```
+
+Lệnh này sẽ:
+
+- Tự động build Docker image cho ứng dụng dựa trên `Dockerfile`.
+- Khởi động 3 dịch vụ: `postgres`, `app` (FastAPI backend), và `scheduler` (hệ thống lập lịch crawl và index định kỳ).
+
+### Truy cập ứng dụng
+
+- **Giao diện Web (UI)**: [http://localhost:8000](http://localhost:8000)
+- **Kiểm tra trạng thái (Health Check)**: [http://localhost:8000/health](http://localhost:8000/health)
 
 ## Cài đặt espeak-ng (bắt buộc cho TTS)
 
@@ -109,142 +157,26 @@ Tạo file `.env` từ `.env.example`:
 Copy-Item .env.example .env
 ```
 
-Cấu hình:
-
-```env
-OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=z-ai/glm-4.5-air:free
-DATABASE_URL=postgresql://cookwhat:cookwhat_password@localhost:5432/cookwhat
-```
-
-Không commit file `.env`. File này đã nằm trong `.gitignore`.
-
 ## PostgreSQL
 
 Repo này dùng PostgreSQL qua Docker, không cài PostgreSQL native vào Windows.
 
-Khởi động database:
-
 ```powershell
+# Khởi động PostgreSQL
 docker compose up -d postgres
-```
 
-Kiểm tra container:
-
-```powershell
+# Kiểm tra container
 docker ps --filter name=cookwhat-postgres
-```
 
-Kiểm tra version:
-
-```powershell
-docker exec cookwhat-postgres postgres --version
-```
-
-Version đang dùng trong `docker-compose.yml`:
-
-```text
-postgres:16-alpine
-```
-
-Connection string:
-
-```env
+# Connection string
 DATABASE_URL=postgresql://cookwhat:cookwhat_password@localhost:5432/cookwhat
-```
 
-Khi backend khởi động, app tự tạo hai bảng:
-
-```text
-chat_sessions
-chat_messages
-```
-
-Kiểm tra bảng:
-
-```powershell
+# Kiểm tra bảng
 docker exec cookwhat-postgres psql -U cookwhat -d cookwhat -c "\dt"
-```
 
-Dừng database:
-
-```powershell
+# Dừng database
 docker compose stop postgres
 ```
-
-Xóa container nhưng giữ data volume:
-
-```powershell
-docker compose down
-```
-
-Xóa cả container và dữ liệu PostgreSQL:
-
-```powershell
-docker compose down -v
-```
-
-## Chạy ứng dụng bằng Docker (Recommended)
-
-Bạn có thể chạy toàn bộ ứng dụng bao gồm FastAPI app, PostgreSQL database và scheduler thông qua Docker Compose mà không cần cài đặt Python hay `espeak-ng` trực tiếp trên máy của mình.
-
-### Chuẩn bị trước khi chạy
-
-1. Đảm bảo Docker Desktop đang chạy.
-2. Đã cấu hình file `.env`.
-3. Đảm bảo Ollama đang chạy trên máy host và đã tải model embedding:
-
-   ```bash
-   ollama pull bge-m3:567m
-   ```
-
-4. Tải dữ liệu ChromaDB có sẵn hoặc build dữ liệu mới (xem hướng dẫn ở mục [ChromaDB và dữ liệu công thức](#chromadb-và-dữ-liệu-công-thức) bên dưới).
-5. Build index BM25 trước khi chạy (nếu chưa có):
-   - Nếu chạy trên máy host (cần cài đặt Python trước):
-
-     ```bash
-     python -m scripts.build_bm25
-     ```
-
-   - Hoặc bạn có thể build trực tiếp từ container sau khi khởi động (xem lệnh ở dưới).
-
-### Khởi động ứng dụng
-
-Chạy lệnh sau tại thư mục gốc của dự án:
-
-```bash
-docker compose up --build -d
-```
-
-Lệnh này sẽ:
-
-- Tự động build Docker image cho ứng dụng dựa trên `Dockerfile`.
-- Khởi động 3 dịch vụ: `postgres`, `app` (FastAPI backend), và `scheduler` (hệ thống lập lịch crawl và index định kỳ).
-
-### Truy cập ứng dụng
-
-- **Giao diện Web (UI)**: [http://localhost:8000](http://localhost:8000)
-- **Kiểm tra trạng thái (Health Check)**: [http://localhost:8000/health](http://localhost:8000/health)
-
-### Các lệnh quản lý Docker hữu ích
-
-- **Xem log của ứng dụng FastAPI**:
-
-  ```bash
-  docker compose logs -f app
-  ```
-
-- **Dừng tất cả các dịch vụ**:
-
-  ```bash
-  docker compose down
-  ```
-
-- **Dừng và xóa toàn bộ dữ liệu database (Reset Database)**:
-
-  ```bash
-  docker compose down -v
-  ```
 
 ## Chạy ứng dụng thủ công
 
@@ -286,62 +218,6 @@ Response mẫu khi PostgreSQL hoạt động:
 ```
 
 Nếu `postgres_history` là `false`, app vẫn chạy nhưng lịch sử chỉ lưu trong memory và sẽ mất khi restart server.
-
-## API
-
-### Health
-
-```http
-GET /health
-```
-
-### Chat
-
-```http
-POST /chat
-Content-Type: application/json
-```
-
-Body:
-
-```json
-{
-  "message": "Mình có gà, trứng, hành lá",
-  "session_id": "optional-session-id",
-  "top_k": 5
-}
-```
-
-Response mẫu:
-
-```json
-{
-  "type": "new_search",
-  "session_id": "session-id",
-  "ingredients": ["gà", "trứng", "hành lá"],
-  "response": "..."
-}
-```
-
-### Lịch sử chat
-
-Lấy danh sách hội thoại:
-
-```http
-GET /api/sessions
-```
-
-Lấy tin nhắn của một hội thoại:
-
-```http
-GET /api/sessions/{session_id}/messages
-```
-
-Xóa một hội thoại:
-
-```http
-DELETE /api/sessions/{session_id}
-```
 
 ## ChromaDB và dữ liệu công thức
 
@@ -398,18 +274,7 @@ chroma_db/
 
 ### Cài đặt dependencies
 
-Dependencies cho BM25 và reranker đã có trong `requirements.txt`:
-
-```text
-rank-bm25==0.2.2        # BM25 sparse search
-sentence-transformers   # Cross-encoder reranker
-```
-
-Nếu chưa cài, chạy:
-
-```bash
-python -m pip install -r requirements.txt
-```
+Các thư viện cần thiết cho BM25 và Reranker (`rank-bm25` và `sentence-transformers`) đã được định nghĩa sẵn trong `requirements.txt` và được cài đặt trong bước cài đặt ban đầu.
 
 ### Cách tải BM25 Index & Embeddings đã build sẵn (Khuyên dùng)
 
@@ -425,22 +290,19 @@ chmod +x scripts/download_pipeline_files.sh
 Script sẽ tự động kiểm tra và tải các file `bm25_index.pkl`, `bm25_meta.json`, `chunks.jsonl`, `documents.jsonl`, và `embeddings.npy` rồi đặt vào chính xác các thư mục tương ứng.
 
 Mặc định, script chỉ tải khi file chưa tồn tại. Để tải lại và ghi đè các file hiện tại:
+
 ```bash
 ./scripts/download_pipeline_files.sh --force
 ```
 
 ### Build BM25 Index thủ công
 
+> [!IMPORTANT]
+> **Khuyến nghị**: Để tiết kiệm thời gian và tài nguyên máy, bạn nên tải trực tiếp BM25 index và các file pipeline đã build sẵn từ Google Drive (xem mục [Cách tải BM25 Index & Embeddings đã build sẵn (Khuyên dùng)](#cách-tải-bm25-index--embeddings-đã-build-sẵn-khuyên-dùng)). Chỉ sử dụng các bước build thủ công dưới đây nếu bạn muốn tạo lại index từ dữ liệu thô.
+
 BM25 index được build từ `data/embeddings/documents.jsonl` (output của pipeline embedding).
 
-**Bước 1:** Đảm bảo đã chạy pipeline embedding trước (nếu chưa):
-
-Linux/macOS:
-
-```bash
-chmod +x scripts/run_pipeline.sh
-./scripts/run_pipeline.sh
-```
+**Bước 1:** Đảm bảo đã chạy pipeline embedding trước để tạo dữ liệu thô (xem mục [Cách 2: Build lại pipeline từ dữ liệu thô](#cách-2-build-lại-pipeline-từ-dữ-liệu-thô)).
 
 **Bước 2:** Build BM25 index
 
@@ -542,26 +404,6 @@ recipes
 
 Nếu PostgreSQL bật, ngữ cảnh và tin nhắn được lưu theo `session_id`. Nếu không, ngữ cảnh được giữ trong memory.
 
-## Dùng PostgreSQL cho dự án khác
-
-PostgreSQL hiện chạy trong Docker và expose ra:
-
-```text
-localhost:5432
-```
-
-Dự án khác có thể kết nối tới cùng server nếu Docker container đang chạy. Tuy nhiên không nên dùng chung database `cookwhat` cho nhiều dự án. Nên tạo database riêng:
-
-```powershell
-docker exec cookwhat-postgres createdb -U cookwhat project_name
-```
-
-Connection string cho database mới:
-
-```env
-DATABASE_URL=postgresql://cookwhat:cookwhat_password@localhost:5432/project_name
-```
-
 ## Xử lý lỗi thường gặp
 
 | Lỗi | Cách xử lý |
@@ -578,31 +420,6 @@ DATABASE_URL=postgresql://cookwhat:cookwhat_password@localhost:5432/project_name
 | Docker daemon chưa chạy | Mở Docker Desktop rồi chạy lại lệnh Docker |
 | Nút đọc không có tiếng | Kiểm tra `espeak-ng` đã cài chưa; xem log uvicorn có `[TTS] Piper model loaded` không |
 | `TTS model chưa được load` (503) | File model thiếu trong `models/tts/`; chạy lại `git pull` để lấy file model |
-| `FileNotFoundError: Không tìm thấy BM25 index` | Chạy `python -m scripts.build_bm25` |
-| `FileNotFoundError: Không tìm thấy documents.jsonl` | Chạy pipeline embedding: `./scripts/run_pipeline.sh` |
+| `FileNotFoundError: Không tìm thấy BM25 index` | Tải sẵn qua `download_pipeline_files.sh`/`.py` (Khuyên dùng) hoặc chạy `python -m scripts.build_bm25` |
+| `FileNotFoundError: Không tìm thấy documents.jsonl` | Tải sẵn qua `download_pipeline_files.sh`/`.py` (Khuyên dùng) hoặc chạy `./scripts/run_pipeline.sh` |
 | Reranker tải lâu lần đầu | Bình thường, download model Hugging Face từ internet. Lần sau nhanh hơn |
-
-## Ghi chú bảo mật
-
-- Không đưa `OPENROUTER_API_KEY` lên Git.
-- Frontend không chứa API key; frontend chỉ gọi backend nội bộ.
-- `cookwhat_password` trong `docker-compose.yml` chỉ phù hợp cho local development. Khi deploy thật cần đổi password và dùng secret manager hoặc biến môi trường an toàn.
-
-## Lệnh hay dùng
-
-```powershell
-# Start database
-docker compose up -d postgres
-
-# Start backend and UI
-.\.venv\Scripts\uvicorn.exe main:app --host 127.0.0.1 --port 8000 --reload
-
-# Check health
-Invoke-RestMethod http://127.0.0.1:8000/health
-
-# Check PostgreSQL tables
-docker exec cookwhat-postgres psql -U cookwhat -d cookwhat -c "\dt"
-
-# Stop database
-docker compose stop postgres
-```
