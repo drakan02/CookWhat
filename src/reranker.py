@@ -11,6 +11,7 @@ Model: BAAI/bge-reranker-v2-m3
 """
 
 from sentence_transformers import CrossEncoder
+import torch
 
 # ---------- Config ----------
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
@@ -27,10 +28,11 @@ def _load_reranker() -> CrossEncoder:
         return _reranker
 
     print(f"[reranker] Loading model '{RERANKER_MODEL}'...")
+    device = "cpu" if not torch.cuda.is_available() else "cuda"
     _reranker = CrossEncoder(
         RERANKER_MODEL,
         max_length=MAX_LENGTH,
-        device="cpu",
+        device=device,
     )
     print("[reranker] Model loaded!")
     return _reranker
