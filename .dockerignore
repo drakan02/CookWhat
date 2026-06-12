@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+chroma_db
+cookpad_data
+data/embeddings
+.vscode
+.idea
