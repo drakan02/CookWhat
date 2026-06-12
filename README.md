@@ -184,7 +184,69 @@ Xóa cả container và dữ liệu PostgreSQL:
 docker compose down -v
 ```
 
-## Chạy ứng dụng
+## Chạy ứng dụng bằng Docker (Recommended)
+
+Bạn có thể chạy toàn bộ ứng dụng bao gồm FastAPI app, PostgreSQL database và scheduler thông qua Docker Compose mà không cần cài đặt Python hay `espeak-ng` trực tiếp trên máy của mình.
+
+### Chuẩn bị trước khi chạy
+
+1. Đảm bảo Docker Desktop đang chạy.
+2. Đã cấu hình file `.env`.
+3. Đảm bảo Ollama đang chạy trên máy host và đã tải model embedding:
+
+   ```bash
+   ollama pull bge-m3:567m
+   ```
+
+4. Tải dữ liệu ChromaDB có sẵn hoặc build dữ liệu mới (xem hướng dẫn ở mục [ChromaDB và dữ liệu công thức](#chromadb-và-dữ-liệu-công-thức) bên dưới).
+5. Build index BM25 trước khi chạy (nếu chưa có):
+   - Nếu chạy trên máy host (cần cài đặt Python trước):
+
+     ```bash
+     python -m scripts.build_bm25
+     ```
+
+   - Hoặc bạn có thể build trực tiếp từ container sau khi khởi động (xem lệnh ở dưới).
+
+### Khởi động ứng dụng
+
+Chạy lệnh sau tại thư mục gốc của dự án:
+
+```bash
+docker compose up --build -d
+```
+
+Lệnh này sẽ:
+
+- Tự động build Docker image cho ứng dụng dựa trên `Dockerfile`.
+- Khởi động 3 dịch vụ: `postgres`, `app` (FastAPI backend), và `scheduler` (hệ thống lập lịch crawl và index định kỳ).
+
+### Truy cập ứng dụng
+
+- **Giao diện Web (UI)**: [http://localhost:8000](http://localhost:8000)
+- **Kiểm tra trạng thái (Health Check)**: [http://localhost:8000/health](http://localhost:8000/health)
+
+### Các lệnh quản lý Docker hữu ích
+
+- **Xem log của ứng dụng FastAPI**:
+
+  ```bash
+  docker compose logs -f app
+  ```
+
+- **Dừng tất cả các dịch vụ**:
+
+  ```bash
+  docker compose down
+  ```
+
+- **Dừng và xóa toàn bộ dữ liệu database (Reset Database)**:
+
+  ```bash
+  docker compose down -v
+  ```
+
+## Chạy ứng dụng thủ công
 
 Khởi động PostgreSQL trước nếu muốn lưu lịch sử:
 
@@ -328,6 +390,7 @@ chroma_db/
 ## BM25 Index và Reranker
 
 Ứng dụng dùng **hybrid retrieval** kết hợp:
+
 - **Dense search**: ChromaDB + BGE-M3 embeddings
 - **Sparse search**: BM25 full-text search
 - **Reranker**: Cross-encoder BAAI/bge-reranker-v2-m3 để xếp hạng lại kết quả
@@ -355,6 +418,7 @@ BM25 index được build từ `data/embeddings/documents.jsonl` (output của p
 **Bước 1:** Đảm bảo đã chạy pipeline embedding trước (nếu chưa):
 
 Linux/macOS:
+
 ```bash
 chmod +x scripts/run_pipeline.sh
 ./scripts/run_pipeline.sh
@@ -363,22 +427,26 @@ chmod +x scripts/run_pipeline.sh
 **Bước 2:** Build BM25 index
 
 Linux/macOS:
+
 ```bash
 python -m scripts.build_bm25
 ```
 
 Windows PowerShell:
+
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.build_bm25
 ```
 
 Output sẽ được lưu tại:
+
 ```text
 data/bm25/bm25_index.pkl   # BM25 index (pickle)
 data/bm25/bm25_meta.json   # Mapping id → metadata + document
 ```
 
 Script sẽ in ra:
+
 ```text
 [bm25] Loaded 1234 documents
 [bm25] Built index with tokenizer: simple_tokenize
