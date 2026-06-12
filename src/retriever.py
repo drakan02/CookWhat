@@ -22,8 +22,8 @@ from src.reranker   import rerank
 from src.vectordb   import search as dense_search
 
 # ---------- Config ----------
-DENSE_CANDIDATES  = 10   # số candidates lấy từ dense search
-SPARSE_CANDIDATES = 10   # số candidates lấy từ BM25
+DENSE_CANDIDATES  = 7   # số candidates lấy từ dense search
+SPARSE_CANDIDATES = 7   # số candidates lấy từ BM25
 RRF_K             = 60   # hằng số RRF, thường dùng 60
 NER_BONUS_WEIGHT  = 0.3  # trọng số của NER overlap bonus
 
