@@ -1,27 +1,28 @@
-const sessionList = document.querySelector("#sessionList");
-const messagesEl = document.querySelector("#messages");
-const form = document.querySelector("#chatForm");
-const input = document.querySelector("#messageInput");
-const sendButton = document.querySelector("#sendButton");
+const sessionList   = document.querySelector("#sessionList");
+const messagesEl    = document.querySelector("#messages");
+const form          = document.querySelector("#chatForm");
+const input         = document.querySelector("#messageInput");
+const sendButton    = document.querySelector("#sendButton");
 const newChatButton = document.querySelector("#newChatButton");
-const openSidebar = document.querySelector("#openSidebar");
-const closeSidebar = document.querySelector("#closeSidebar");
-const appShell = document.querySelector(".app-shell");
-const deleteModal = document.querySelector("#deleteModal");
-const deleteModalCancel = document.querySelector("#deleteModalCancel");
+const openSidebar   = document.querySelector("#openSidebar");
+const closeSidebar  = document.querySelector("#closeSidebar");
+const appShell      = document.querySelector(".app-shell");
+const deleteModal   = document.querySelector("#deleteModal");
+const deleteModalCancel  = document.querySelector("#deleteModalCancel");
 const deleteModalConfirm = document.querySelector("#deleteModalConfirm");
-const micButton = document.querySelector("#micButton");
+const micButton     = document.querySelector("#micButton");
 const imageUploadButton = document.querySelector("#imageUploadButton");
-const imageFileInput = document.querySelector("#imageFileInput");
-const imagePreviewBar = document.querySelector("#imagePreviewBar");
+const imageFileInput    = document.querySelector("#imageFileInput");
+const imagePreviewBar   = document.querySelector("#imagePreviewBar");
 const imagePreviewThumb = document.querySelector("#imagePreviewThumb");
-const imagePreviewName = document.querySelector("#imagePreviewName");
+const imagePreviewName  = document.querySelector("#imagePreviewName");
 const imageRemoveButton = document.querySelector("#imageRemoveButton");
+const quickActions      = document.querySelector("#quickActions");
 
-let currentSessionId = localStorage.getItem("cookwhat_session_id") || crypto.randomUUID();
-let isSending = false;
-let openSessionMenu = null;
-let editingSessionId = null;
+let currentSessionId    = localStorage.getItem("cookwhat_session_id") || crypto.randomUUID();
+let isSending           = false;
+let openSessionMenu     = null;
+let editingSessionId    = null;
 let pendingRenameSessionId = null;
 let deleteTargetSession = null;
 
@@ -29,10 +30,201 @@ let deleteTargetSession = null;
 let pendingImageFile = null;
 
 // TTS state
-let currentAudio = null;
+let currentAudio      = null;
 let currentSpeakButton = null;
-let currentAudioUrl = null;
+let currentAudioUrl   = null;
 let ttsAbortController = null;
+
+// ─── Rotating placeholders ────────────────────────────────────────────────────
+const PLACEHOLDERS = [
+  "Ví dụ: Mình có gà, trứng, hành lá...",
+  "Tủ lạnh còn gì? Cho mình biết nhé...",
+  "Hỏi gì cũng được: calo, thực đơn, cách nấu...",
+  "Gợi ý món chay hôm nay?",
+  "Còn thịt bò và khoai tây, nấu gì ngon?",
+  "Muốn ăn ngon mà ít dầu mỡ...",
+];
+
+let placeholderIndex = 0;
+function rotatePlaceholder() {
+  placeholderIndex = (placeholderIndex + 1) % PLACEHOLDERS.length;
+  input.placeholder = PLACEHOLDERS[placeholderIndex];
+}
+// Rotate placeholder every 4 seconds when input is empty and not focused
+setInterval(() => {
+  if (document.activeElement !== input && !input.value) rotatePlaceholder();
+}, 4000);
+
+// ════════════════════════════════════════════════════════════════
+// SIDEBAR HISTORY — Smart helpers
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Classify chat type from title + ingredients text.
+ * Returns { icon, type }.
+ */
+function classifySession(title, ingredients) {
+  const raw  = ((title || "") + " " + (Array.isArray(ingredients) ? ingredients.join(" ") : (ingredients || ""))).toLowerCase();
+  // Image/photo detection
+  if (/ảnh|hình|photo|image|chụp|nhận diện|mô tả ảnh/.test(raw))   return { icon: "📷", type: "image" };
+  // Calorie / nutrition
+  if (/calo|kcal|dinh dưỡng|nutrition|calori|protein|macro/.test(raw)) return { icon: "🔥", type: "calorie" };
+  // Healthy / diet
+  if (/lành mạnh|healthy|chay|ít dầu|salad|kiêng|giảm cân|eat clean/.test(raw)) return { icon: "🥗", type: "healthy" };
+  // Meal plan / weekly
+  if (/thực đơn|tuần|kế hoạch|plan|lịch ăn/.test(raw))             return { icon: "📅", type: "plan" };
+  // Sick / recovery
+  if (/ốm|bệnh|cảm|sốt|tiêu chảy|đau bụng|bổ dưỡng khi/.test(raw)) return { icon: "🤒", type: "sick" };
+  // Small talk / greet
+  if (/xin chào|hello|hi |cảm ơn|cám ơn|chào bạn/.test(raw))       return { icon: "💬", type: "chat" };
+  // Default: recipe suggestion
+  return { icon: "🍲", type: "recipe" };
+}
+
+/**
+ * Generate a short, readable title (max ~32 chars) from raw session title + ingredients.
+ * Falls back gracefully if input is empty.
+ */
+function generateSmartTitle(rawTitle, ingredients) {
+  const title  = (rawTitle  || "").trim();
+  const ingArr = Array.isArray(ingredients) ? ingredients : [];
+  const ingStr = ingArr
+    .filter(s => !s.startsWith("[Mô tả ảnh]"))
+    .join(", ")
+    .trim();
+
+  const lower = title.toLowerCase();
+
+  // 1. Image conversation (VLM prefix or image keywords)
+  if (/\[mô tả ảnh\]/.test(lower) || ingArr.some(s => s.startsWith("[Mô tả ảnh]"))) {
+    return "Nhận diện món ăn";
+  }
+  if (/ảnh|hình|photo|image|chụp/.test(lower) && title.length > 8) {
+    return "Nhận diện món ăn";
+  }
+
+  // 2. Calorie / nutrition
+  if (/tính calo|kcal|dinh dưỡng|calori|macro|protein|chất béo/.test(lower)) {
+    const subject = ingStr ? ingStr.split(",")[0].trim() : "";
+    return subject ? `Tính calo: ${subject}`.slice(0, 32) : "Tính calo bữa ăn";
+  }
+
+  // 3. Sick / recovery diet
+  if (/bị ốm|bị bệnh|bị cảm|bị sốt|\bốm\b|\bsốt\b|tiêu chảy|đau bụng/.test(lower)) {
+    return "Ăn gì khi bị ốm";
+  }
+
+  // 4. Healthy / diet
+  if (/lành mạnh|healthy|chay|ít dầu|giảm cân|kiêng|eat clean/.test(lower)) {
+    return "Món ăn lành mạnh";
+  }
+
+  // 5. Meal plan
+  if (/thực đơn|lịch ăn|kế hoạch ăn/.test(lower) || (/tuần/.test(lower) && /ăn|nấu|món/.test(lower))) {
+    return "Thực đơn cả tuần";
+  }
+
+  // 6. Ingredient-based title (from ingredients field)
+  if (ingStr) {
+    const parts = ingStr.split(",").slice(0, 2).map(s => s.trim()).filter(Boolean);
+    if (parts.length) return `Món từ ${parts.join(" và ")}`.slice(0, 34);
+  }
+
+  // 7. Title looks like a raw prompt — shorten it
+  if (title && title.length > 0 && !/^(new chat)$/i.test(title)) {
+    const cleaned = title
+      .replace(/^(mình có|tôi có|tui có|mình|tôi|tui|chúng mình|bạn ơi)[,\s]*/i, "")
+      .replace(/^(có thể|hãy|giúp|cho mình|cho tôi|gợi ý)[\s]*/i, "")
+      .replace(/\?$/, "")
+      .trim();
+    if (cleaned.length > 0) {
+      const words = cleaned.split(/\s+/);
+      if (words.length <= 5) return cleaned;
+      return words.slice(0, 5).join(" ") + "…";
+    }
+  }
+
+  return "Cuộc trò chuyện mới";
+}
+
+/**
+ * Generate a short, useful subtitle (max 1 line) for the session item.
+ */
+function generateSubtitle(rawTitle, ingredients) {
+  const ingArr = Array.isArray(ingredients) ? ingredients : [];
+  const lower  = (rawTitle || "").toLowerCase();
+
+  // Image session
+  if (ingArr.some(s => s.startsWith("[Mô tả ảnh]")) || /ảnh|hình|photo|image|chụp/.test(lower)) {
+    return "1 ảnh đã tải lên";
+  }
+
+  // Clean ingredients list (remove VLM prefix entries)
+  const cleanIngr = ingArr
+    .filter(s => !s.startsWith("[Mô tả ảnh]") && s.trim().length > 0)
+    .map(s => s.trim());
+
+  if (cleanIngr.length > 0) {
+    return cleanIngr.slice(0, 4).join(", ");
+  }
+
+  // Fallback: shorten the raw title slightly differently
+  const words = (rawTitle || "").trim().split(/\s+/).slice(0, 8).join(" ");
+  return words || "CookWhat";
+}
+
+/**
+ * Format a date as a relative time string in Vietnamese.
+ */
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "";
+
+  const now    = new Date();
+  const diffMs = now - date;
+  const diffSec  = Math.floor(diffMs / 1000);
+  const diffMin  = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay  = Math.floor(diffHour / 24);
+
+  if (diffSec < 60)   return "vừa xong";
+  if (diffMin < 60)   return `${diffMin} phút trước`;
+  if (diffHour < 24)  {
+    // Show clock time for today
+    return date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  }
+  if (diffDay === 1)  return "Hôm qua";
+  if (diffDay < 7)    return `${diffDay} ngày trước`;
+  // Older: show date
+  return date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+}
+
+/**
+ * Determine which time group a session belongs to.
+ * Returns a label string.
+ */
+function getTimeGroup(dateStr) {
+  if (!dateStr) return "Cũ hơn";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "Cũ hơn";
+
+  const now      = new Date();
+  const today    = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  const week7     = new Date(today); week7.setDate(week7.getDate() - 7);
+  const month30   = new Date(today); month30.setDate(month30.getDate() - 30);
+
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (d >= today)     return "Hôm nay";
+  if (d >= yesterday) return "Hôm qua";
+  if (d >= week7)     return "7 ngày qua";
+  if (d >= month30)   return "30 ngày qua";
+  return "Cũ hơn";
+}
+
+const TIME_GROUP_ORDER = ["Hôm nay", "Hôm qua", "7 ngày qua", "30 ngày qua", "Cũ hơn"];
 
 function setCurrentSession(sessionId) {
   currentSessionId = sessionId || crypto.randomUUID();
@@ -105,7 +297,7 @@ function stripMarkdown(content) {
     .trim();
 }
 
-// TTS helpers
+// ─── TTS helpers ──────────────────────────────────────────────────────────────
 function splitIntoChunks(text, maxLen = 200) {
   const sentences = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
   const chunks = [];
@@ -146,7 +338,7 @@ function prefetchFirstChunk(text) {
   const audioUrlPromise = fetchAudioChunk(chunks[0], abortController.signal).catch(() => null);
  
   return {
-    audioUrlPromise, // Promise<string|null>
+    audioUrlPromise,
     abortController,
     chunks,
     cancel() {
@@ -164,18 +356,12 @@ function playAudioUrl(audioUrl) {
 
     audio.addEventListener("ended", () => {
       URL.revokeObjectURL(audioUrl);
-      if (currentAudioUrl === audioUrl) {
-        currentAudio = null;
-        currentAudioUrl = null;
-      }
+      if (currentAudioUrl === audioUrl) { currentAudio = null; currentAudioUrl = null; }
       resolve();
     });
     audio.addEventListener("error", () => {
       URL.revokeObjectURL(audioUrl);
-      if (currentAudioUrl === audioUrl) {
-        currentAudio = null;
-        currentAudioUrl = null;
-      }
+      if (currentAudioUrl === audioUrl) { currentAudio = null; currentAudioUrl = null; }
       resolve();
     });
 
@@ -184,20 +370,10 @@ function playAudioUrl(audioUrl) {
 }
 
 function stopSpeaking() {
-  if (ttsAbortController) {
-    ttsAbortController.abort();
-    ttsAbortController = null;
-  }
+  if (ttsAbortController) { ttsAbortController.abort(); ttsAbortController = null; }
 
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio.src = "";
-    currentAudio = null;
-  }
-  if (currentAudioUrl) {
-    URL.revokeObjectURL(currentAudioUrl);
-    currentAudioUrl = null;
-  }
+  if (currentAudio) { currentAudio.pause(); currentAudio.src = ""; currentAudio = null; }
+  if (currentAudioUrl) { URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
 
   if (currentSpeakButton) {
     currentSpeakButton.classList.remove("is-active", "is-speaking");
@@ -209,8 +385,6 @@ function stopSpeaking() {
   }
 }
 
-// TTS pipeline streaming
-// Fetch chunk N+1 while playing chunk N
 async function startStreamingTTS(text, speakButton, prefetch = null) {
   const PREFETCH = 2;
   
@@ -251,11 +425,7 @@ async function startStreamingTTS(text, speakButton, prefetch = null) {
   for (let playIndex = 0; playIndex < chunks.length; playIndex++) {
     if (signal.aborted) break;
  
-    // Trigger fetch next chunk
-    if (nextFetchIndex < chunks.length) {
-      scheduleFetch(nextFetchIndex);
-      nextFetchIndex++;
-    }
+    if (nextFetchIndex < chunks.length) { scheduleFetch(nextFetchIndex); nextFetchIndex++; }
 
     let audioUrl = null;
     try {
@@ -265,15 +435,10 @@ async function startStreamingTTS(text, speakButton, prefetch = null) {
       break;
     }
  
-    if (signal.aborted) {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      break;
-    }
- 
-    if (!audioUrl) continue; 
+    if (signal.aborted) { if (audioUrl) URL.revokeObjectURL(audioUrl); break; }
+    if (!audioUrl) continue;
  
     await playAudioUrl(audioUrl);
- 
     if (signal.aborted) break;
   }
 
@@ -294,9 +459,7 @@ async function startStreamingTTS(text, speakButton, prefetch = null) {
     currentSpeakButton = null;
     ttsAbortController = null;
  
-    if (fetchError) {
-      showToast(`Lỗi TTS: ${fetchError.message}`);
-    }
+    if (fetchError) showToast(`Lỗi TTS: ${fetchError.message}`);
   }
 }
 
@@ -311,14 +474,11 @@ function showToast(message, duration = 3000) {
   toast.textContent = message;
   toast.classList.add("show");
   clearTimeout(toast._hideTimer);
-  toast._hideTimer = window.setTimeout(() => {
-    toast.classList.remove("show");
-  }, duration);
+  toast._hideTimer = window.setTimeout(() => { toast.classList.remove("show"); }, duration);
 }
 
 function closeSessionMenu() {
   if (!openSessionMenu) return;
-
   const menu = openSessionMenu.querySelector(".session-menu");
   if (menu) menu.hidden = true;
   openSessionMenu.removeAttribute("data-open");
@@ -327,12 +487,7 @@ function closeSessionMenu() {
 
 function toggleSessionMenu(item) {
   if (!item) return;
-
-  if (openSessionMenu === item) {
-    closeSessionMenu();
-    return;
-  }
-
+  if (openSessionMenu === item) { closeSessionMenu(); return; }
   closeSessionMenu();
   item.setAttribute("data-open", "true");
   openSessionMenu = item;
@@ -347,7 +502,6 @@ function closeDeleteModal() {
 
 function openDeleteModal(session) {
   if (!session?.id || !deleteModal) return;
-
   closeSessionMenu();
   deleteTargetSession = session;
   deleteModal.hidden = false;
@@ -392,10 +546,7 @@ async function finishRenameSession(sessionId, inputEl, cancel = false) {
     await loadSessions();
   } catch (error) {
     showToast(error.message || "Không thể đổi tên đoạn chat.");
-    window.requestAnimationFrame(() => {
-      inputEl.focus();
-      inputEl.select();
-    });
+    window.requestAnimationFrame(() => { inputEl.focus(); inputEl.select(); });
   }
 }
 
@@ -417,7 +568,6 @@ function renderInlineMarkdown(value) {
 
 function flushList(listItems, ordered) {
   if (!listItems.length) return "";
-
   const tag = ordered ? "ol" : "ul";
   const items = listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("");
   return `<${tag}>${items}</${tag}>`;
@@ -430,40 +580,30 @@ function isMarkdownTableRow(line) {
 
 function isMarkdownTableSeparator(line) {
   if (!isMarkdownTableRow(line)) return false;
-  return line
-    .trim()
-    .slice(1, -1)
-    .split("|")
-    .every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+  return line.trim().slice(1, -1).split("|").every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
 function parseMarkdownTableRow(line) {
-  return line
-    .trim()
-    .slice(1, -1)
-    .split("|")
-    .map((cell) => cell.trim());
+  return line.trim().slice(1, -1).split("|").map((cell) => cell.trim());
 }
 
 function renderTable(rows) {
   if (rows.length < 2) return "";
-
-  const headers = parseMarkdownTableRow(rows[0]);
+  const headers  = parseMarkdownTableRow(rows[0]);
   const bodyRows = rows.slice(2).map(parseMarkdownTableRow);
   const head = headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
   const body = bodyRows
     .map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`)
     .join("");
-
   return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function renderMarkdown(content) {
-  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const lines  = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const blocks = [];
-  let paragraph = [];
-  let listItems = [];
-  let orderedList = false;
+  let paragraph    = [];
+  let listItems    = [];
+  let orderedList  = false;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -478,39 +618,23 @@ function renderMarkdown(content) {
   };
 
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
+    const line    = lines[index];
     const trimmed = line.trim();
 
-    if (!trimmed) {
-      flushParagraph();
-      flushCurrentList();
-      continue;
-    }
+    if (!trimmed) { flushParagraph(); flushCurrentList(); continue; }
 
-    if (/^---+$/.test(trimmed)) {
-      flushParagraph();
-      flushCurrentList();
-      blocks.push("<hr>");
-      continue;
-    }
+    if (/^---+$/.test(trimmed)) { flushParagraph(); flushCurrentList(); blocks.push("<hr>"); continue; }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      flushParagraph();
-      flushCurrentList();
+      flushParagraph(); flushCurrentList();
       const level = Math.min(headingMatch[1].length + 2, 6);
       blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
       continue;
     }
 
-    if (
-      isMarkdownTableRow(trimmed) &&
-      index + 1 < lines.length &&
-      isMarkdownTableSeparator(lines[index + 1])
-    ) {
-      flushParagraph();
-      flushCurrentList();
-
+    if (isMarkdownTableRow(trimmed) && index + 1 < lines.length && isMarkdownTableSeparator(lines[index + 1])) {
+      flushParagraph(); flushCurrentList();
       const tableRows = [trimmed, lines[index + 1].trim()];
       index += 2;
       while (index < lines.length && isMarkdownTableRow(lines[index])) {
@@ -587,12 +711,9 @@ function updateTypingBubble(bubble, text, { charDelay = 18, done = false, onDone
   function finalize() {
     if (!bubble._typingState) return;
     const currentState = bubble._typingState;
-    if (currentState.interval) {
-      clearInterval(currentState.interval);
-      currentState.interval = null;
-    }
+    if (currentState.interval) { clearInterval(currentState.interval); currentState.interval = null; }
     const finalText = currentState.target;
-    const callback = currentState.onDone;
+    const callback  = currentState.onDone;
     bubble._typingState = null;
     bubble.innerHTML = renderMarkdown(finalText);
     if (typeof callback === "function") callback();
@@ -608,12 +729,7 @@ function updateTypingBubble(bubble, text, { charDelay = 18, done = false, onDone
       scrollToBottom();
       return;
     }
-
-    if (currentState.doneRequested) {
-      finalize();
-      return;
-    }
-
+    if (currentState.doneRequested) { finalize(); return; }
     clearInterval(currentState.interval);
     currentState.interval = null;
   }
@@ -627,13 +743,84 @@ function updateTypingBubble(bubble, text, { charDelay = 18, done = false, onDone
   }
 }
 
+// ─── Welcome / Empty State ────────────────────────────────────────────────────
+const SUGGESTION_CARDS = [
+  {
+    icon: "🥚",
+    title: "Có trứng, cà chua",
+    desc: "Gợi ý món từ nguyên liệu đơn giản",
+    prompt: "Mình có trứng, cà chua, hành lá. Gợi ý món ăn đơn giản và ngon nhé!",
+  },
+  {
+    icon: "📷",
+    title: "Chụp ảnh tủ lạnh",
+    desc: "Upload ảnh, CookWhat phân tích nguyên liệu",
+    action: "upload-image",
+  },
+  {
+    icon: "🥗",
+    title: "Ăn lành mạnh",
+    desc: "Món ít dầu mỡ, tốt cho sức khỏe",
+    prompt: "Gợi ý món ăn ít dầu mỡ, thanh đạm và tốt cho sức khỏe. Ưu tiên rau củ và protein.",
+  },
+  {
+    icon: "🔥",
+    title: "Tính calo bữa ăn",
+    desc: "Ước lượng dinh dưỡng cho món của bạn",
+    prompt: "Ước lượng calo và thông tin dinh dưỡng (protein, carb, chất béo) cho bữa ăn của mình giúp tôi nhé.",
+  },
+];
+
 function renderEmpty() {
   messagesEl.innerHTML = `
     <div class="empty-state">
-      <h2>Hôm nay nấu gì?</h2>
-      <p>Gõ nguyên liệu đang có trong tủ lạnh. CookWhat sẽ tìm món phù hợp và bạn có thể hỏi tiếp như một cuộc trò chuyện.</p>
+      <div class="hero-section">
+        <div class="hero-icon" aria-hidden="true">🍳</div>
+        <h2 class="hero-title">Hôm nay nấu gì?</h2>
+        <p class="hero-subtitle">Nhập nguyên liệu bạn đang có, chụp ảnh tủ lạnh hoặc hỏi CookWhat để được gợi ý món phù hợp.</p>
+      </div>
+
+      <div class="suggestion-grid" role="list" aria-label="Gợi ý nhanh">
+        ${SUGGESTION_CARDS.map((card, i) => `
+          <button
+            type="button"
+            class="suggestion-card"
+            data-card-index="${i}"
+            role="listitem"
+            aria-label="${escapeHtml(card.title)}"
+          >
+            <div class="suggestion-card-icon" aria-hidden="true">${card.icon}</div>
+            <div class="suggestion-card-title">${escapeHtml(card.title)}</div>
+            <div class="suggestion-card-desc">${escapeHtml(card.desc)}</div>
+          </button>
+        `).join("")}
+      </div>
     </div>
   `;
+
+  // Attach click handlers for suggestion cards
+  messagesEl.querySelectorAll(".suggestion-card").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx  = parseInt(btn.dataset.cardIndex, 10);
+      const card = SUGGESTION_CARDS[idx];
+      if (!card) return;
+
+      if (card.action === "upload-image") {
+        if (!isSending && imageFileInput) imageFileInput.click();
+        input.focus();
+        return;
+      }
+
+      if (card.prompt) {
+        input.value = card.prompt;
+        autoResizeInput();
+        input.focus();
+        // Add a subtle visual feedback
+        btn.style.transform = "scale(0.96)";
+        setTimeout(() => { btn.style.transform = ""; }, 160);
+      }
+    });
+  });
 }
 
 function createAnswerActions(content, prefetch = null) {
@@ -668,16 +855,9 @@ function createAnswerActions(content, prefetch = null) {
 
   speakButton.addEventListener("click", (event) => {
     event.stopPropagation();
-
-    if (currentSpeakButton === speakButton) {
-      stopSpeaking();
-      pendingPrefetch = null;
-      return;
-    }
-
+    if (currentSpeakButton === speakButton) { stopSpeaking(); pendingPrefetch = null; return; }
     const usedPrefetch = pendingPrefetch;
     pendingPrefetch = null;
-
     startStreamingTTS(content, speakButton, usedPrefetch);
   });
 
@@ -686,33 +866,39 @@ function createAnswerActions(content, prefetch = null) {
 }
 
 /**
- * Parse a stored user message that may contain the VLM-combined format:
- *   "[Mô tả ảnh]: <description>\n\n[Câu hỏi của bạn]: <text>"
- * Returns { hasImageContext, displayText }.
+ * Parse a stored user message that may contain the VLM-combined format.
  */
 function parseUserMessage(content) {
-  // Format: combined image description + question
   const combined = content.match(
     /^\[Mô tả ảnh\]:[\s\S]*?\n\n\[Câu hỏi của bạn\]:\s*([\s\S]*)$/
   );
   if (combined) return { hasImageContext: true, displayText: combined[1].trim() };
-  // Format: image description only (no typed question)
   if (content.startsWith("[Mô tả ảnh]:"))
     return { hasImageContext: true, displayText: "" };
   return { hasImageContext: false, displayText: content };
 }
 
+// ─── Add message with avatar ──────────────────────────────────────────────────
 function addMessage(role, content, options = {}) {
   const empty = messagesEl.querySelector(".empty-state");
   if (empty) empty.remove();
 
   const normalizedRole = String(role || "").trim().toLowerCase();
-  const safeRole = normalizedRole === "assistant" ? "assistant" : "user";
+  const safeRole   = normalizedRole === "assistant" ? "assistant" : "user";
   const safeContent = String(content || "");
 
   const row = document.createElement("div");
   row.className = `message-row ${safeRole}${options.loading ? " loading" : ""}`;
   if (options.id) row.id = options.id;
+
+  // Assistant avatar
+  if (safeRole === "assistant") {
+    const avatar = document.createElement("div");
+    avatar.className = "assistant-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.textContent = "🍳";
+    row.appendChild(avatar);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -724,14 +910,13 @@ function addMessage(role, content, options = {}) {
           <div class="typing-indicator" aria-label="Đang xử lý">
             <span></span><span></span><span></span>
           </div>
-          <span class="loading-label"></span>
+          <span class="loading-label">${options.loadingLabel || "🍳 CookWhat đang tìm món phù hợp..."}</span>
         </div>`;
     } else {
       bubble.innerHTML = renderMarkdown(safeContent);
     }
   } else {
-    // ── User bubble ──────────────────────────────────────────────────────────
-    // 1. If we have a live image data URL (just uploaded), show thumbnail
+    // User bubble
     if (options.imageDataUrl) {
       const imgWrap = document.createElement("div");
       imgWrap.className = "user-bubble-image";
@@ -741,7 +926,6 @@ function addMessage(role, content, options = {}) {
       imgWrap.appendChild(img);
       bubble.appendChild(imgWrap);
     } else {
-      // 2. Loaded from history: detect [Mô tả ảnh]: prefix and clean it up
       const parsed = parseUserMessage(safeContent);
       if (parsed.hasImageContext) {
         const badge = document.createElement("div");
@@ -760,7 +944,6 @@ function addMessage(role, content, options = {}) {
       }
     }
 
-    // Plain text (no image context)
     const textNode = document.createTextNode(safeContent);
     bubble.appendChild(textNode);
   }
@@ -781,6 +964,13 @@ function createStreamingAssistantMessage() {
 
   const row = document.createElement("div");
   row.className = "message-row assistant";
+
+  // Avatar
+  const avatar = document.createElement("div");
+  avatar.className = "assistant-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = "🍳";
+  row.appendChild(avatar);
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -815,7 +1005,7 @@ function updateStreamingAssistantMessage(row, content, done = false) {
 
 async function readChatResponse(response) {
   const contentType = response.headers.get("content-type") || "";
-  const sessionId = response.headers.get("x-session-id");
+  const sessionId   = response.headers.get("x-session-id");
 
   if (contentType.includes("application/json")) {
     const data = await response.json().catch(() => ({}));
@@ -829,14 +1019,10 @@ async function readChatResponse(response) {
 
   if (!response.body) {
     const text = await response.text();
-    return {
-      mode: "text",
-      sessionId,
-      text,
-    };
+    return { mode: "text", sessionId, text };
   }
 
-  const reader = response.body.getReader();
+  const reader  = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let text = "";
 
@@ -847,17 +1033,12 @@ async function readChatResponse(response) {
   }
 
   text += decoder.decode();
-
-  return {
-    mode: "text",
-    sessionId,
-    text,
-  };
+  return { mode: "text", sessionId, text };
 }
 
 async function streamAssistantResponse(response) {
   const contentType = response.headers.get("content-type") || "";
-  const sessionId = response.headers.get("x-session-id");
+  const sessionId   = response.headers.get("x-session-id");
 
   if (contentType.includes("application/json")) {
     const data = await response.json().catch(() => ({}));
@@ -871,22 +1052,17 @@ async function streamAssistantResponse(response) {
 
   if (!response.body) {
     const text = await response.text();
-    return {
-      sessionId,
-      text,
-      streamed: false,
-    };
+    return { sessionId, text, streamed: false };
   }
 
-  const row = createStreamingAssistantMessage();
-  const reader = response.body.getReader();
+  const row     = createStreamingAssistantMessage();
+  const reader  = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let fullText = "";
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-
     fullText += decoder.decode(value, { stream: true });
     updateStreamingAssistantMessage(row, fullText, false);
   }
@@ -894,11 +1070,7 @@ async function streamAssistantResponse(response) {
   fullText += decoder.decode();
   updateStreamingAssistantMessage(row, fullText, true);
 
-  return {
-    sessionId,
-    text: fullText,
-    streamed: true,
-  };
+  return { sessionId, text: fullText, streamed: true };
 }
 
 function setLoading(enabled) {
@@ -907,6 +1079,11 @@ function setLoading(enabled) {
   input.disabled = enabled;
   if (micButton) micButton.disabled = enabled;
   if (imageUploadButton) imageUploadButton.disabled = enabled;
+  if (quickActions) {
+    quickActions.querySelectorAll(".quick-action-btn").forEach((btn) => {
+      btn.disabled = enabled;
+    });
+  }
 }
 
 function autoResizeInput() {
@@ -914,50 +1091,56 @@ function autoResizeInput() {
   input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
 }
 
-async function loadSessions() {
-  const response = await fetch("/api/sessions");
-  const sessions = await response.json();
+function buildSessionItem(session) {
+  const item = document.createElement("div");
+  const isActive = session.id === currentSessionId;
+  const isEditing = session.id === editingSessionId;
 
-  sessionList.innerHTML = "";
-  sessions.forEach((session) => {
-    const item = document.createElement("div");
-    const isActive = session.id === currentSessionId;
-    const isEditing = session.id === editingSessionId;
+  item.className = `session-item${isActive ? " active" : ""}${isEditing ? " editing" : ""}`;
+  item.dataset.sessionId = session.id;
 
-    item.className = `session-item${isActive ? " active" : ""}${isEditing ? " editing" : ""}`;
-    item.dataset.sessionId = session.id;
-    item.innerHTML = `
-      <button class="session-button${isActive ? " active" : ""}" type="button">
-        <span class="session-main">
+  const smartTitle = generateSmartTitle(session.title, session.ingredients);
+  const { icon } = classifySession(session.title, session.ingredients);
+  const smartSubtitle = generateSubtitle(session.title, session.ingredients);
+  const relativeTime = formatRelativeTime(session.updated_at || session.created_at || null);
+
+  item.innerHTML = `
+    <button class="session-button${isActive ? " active" : ""}" type="button"${isEditing ? " hidden" : ""} title="${escapeHtml(smartTitle)}">
+      <span class="session-icon">${icon}</span>
+      <span class="session-main">
+        <span class="session-header-row">
           <span class="session-title-row">
             ${session.pinned ? pinIconSvg() : ""}
-            <span class="session-title-text${isEditing ? " hidden" : ""}">${escapeHtml(session.title || "New chat")}</span>
+            <span class="session-title-text">${escapeHtml(smartTitle)}</span>
           </span>
-          <span class="session-meta">${escapeHtml((session.ingredients || []).join(", ") || "CookWhat")}</span>
+          <span class="session-time">${relativeTime}</span>
         </span>
-      </button>
-      <input
-        class="session-rename-input"
-        type="text"
-        value="${escapeHtml(session.title || "New chat")}"
-        aria-label="Sửa tên đoạn chat"
-        ${isEditing ? "" : "hidden"}
-      />
-      <button class="session-menu-trigger" type="button" aria-label="Mở tùy chọn" aria-haspopup="menu">
-        <span aria-hidden="true">⋯</span>
-      </button>
-      <div class="session-menu" role="menu" hidden>
-        <button type="button" data-action="rename">Sửa tên</button>
-        <button type="button" data-action="pin">${session.pinned ? "Bỏ ghim" : "Ghim lên đầu"}</button>
-        <button type="button" data-action="delete">Xóa đoạn chat</button>
-      </div>
-    `;
+        <span class="session-subtitle">${escapeHtml(smartSubtitle)}</span>
+      </span>
+    </button>
+    <input
+      class="session-rename-input"
+      type="text"
+      value="${escapeHtml(session.title || "Cuộc trò chuyện mới")}"
+      aria-label="Sửa tên đoạn chat"
+      ${isEditing ? "" : "hidden"}
+    />
+    <button class="session-menu-trigger" type="button" aria-label="Mở tùy chọn" aria-haspopup="menu">
+      <span aria-hidden="true">⋯</span>
+    </button>
+    <div class="session-menu" role="menu" hidden>
+      <button type="button" data-action="rename">✏️ Sửa tên</button>
+      <button type="button" data-action="pin">${session.pinned ? "📌 Bỏ ghim" : "📌 Ghim lên đầu"}</button>
+      <button type="button" data-action="delete">🗑️ Xóa đoạn chat</button>
+    </div>
+  `;
 
-    const button = item.querySelector(".session-button");
-    const renameInput = item.querySelector(".session-rename-input");
-    const menuTrigger = item.querySelector(".session-menu-trigger");
-    const menu = item.querySelector(".session-menu");
+  const button = item.querySelector(".session-button");
+  const renameInput = item.querySelector(".session-rename-input");
+  const menuTrigger = item.querySelector(".session-menu-trigger");
+  const menu = item.querySelector(".session-menu");
 
+  if (button) {
     button.addEventListener("click", () => {
       if (editingSessionId === session.id) return;
       closeSessionMenu();
@@ -965,7 +1148,9 @@ async function loadSessions() {
       loadMessages(session.id);
       loadSessions();
     });
+  }
 
+  if (menuTrigger) {
     menuTrigger.addEventListener("click", (event) => {
       event.stopPropagation();
       if (menu.hidden) {
@@ -975,7 +1160,9 @@ async function loadSessions() {
         closeSessionMenu();
       }
     });
+  }
 
+  if (menu) {
     menu.addEventListener("click", async (event) => {
       const actionButton = event.target.closest("button[data-action]");
       if (!actionButton) return;
@@ -998,8 +1185,10 @@ async function loadSessions() {
       closeSessionMenu();
       await loadSessions();
     });
+  }
 
-    renameInput?.addEventListener("keydown", async (event) => {
+  if (renameInput) {
+    renameInput.addEventListener("keydown", async (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         await finishRenameSession(session.id, renameInput);
@@ -1011,20 +1200,75 @@ async function loadSessions() {
       }
     });
 
-    renameInput?.addEventListener("blur", async () => {
+    renameInput.addEventListener("blur", async () => {
       if (editingSessionId !== session.id) return;
       await finishRenameSession(session.id, renameInput);
     });
+  }
 
-    if (pendingRenameSessionId === session.id && renameInput) {
-      window.requestAnimationFrame(() => {
-        renameInput.focus();
-        renameInput.select();
-      });
+  if (pendingRenameSessionId === session.id && renameInput) {
+    window.requestAnimationFrame(() => {
+      renameInput.focus();
+      renameInput.select();
+    });
+  }
+
+  return item;
+}
+
+async function loadSessions() {
+  try {
+    const response = await fetch("/api/sessions");
+    const sessions = await response.json();
+
+    sessionList.innerHTML = "";
+
+    if (!sessions || sessions.length === 0) {
+      sessionList.innerHTML = `
+        <div class="history-empty">
+          <div class="history-empty-icon">💬</div>
+          <div class="history-empty-title">Chưa có cuộc trò chuyện nào</div>
+          <div class="history-empty-desc">Bắt đầu bằng cách nhập nguyên liệu hoặc tải ảnh thực phẩm.</div>
+        </div>
+      `;
+      return;
     }
 
-    sessionList.appendChild(item);
-  });
+    // Grouping
+    const groups = {
+      "Hôm nay": [],
+      "Hôm qua": [],
+      "7 ngày qua": [],
+      "30 ngày qua": [],
+      "Cũ hơn": []
+    };
+
+    sessions.forEach(session => {
+      const groupName = getTimeGroup(session.updated_at || session.created_at || null);
+      if (groups[groupName]) {
+        groups[groupName].push(session);
+      } else {
+        groups["Cũ hơn"].push(session);
+      }
+    });
+
+    TIME_GROUP_ORDER.forEach(groupName => {
+      const groupSessions = groups[groupName];
+      if (groupSessions && groupSessions.length > 0) {
+        const header = document.createElement("div");
+        header.className = "session-group-header";
+        header.textContent = groupName;
+        sessionList.appendChild(header);
+
+        groupSessions.forEach(session => {
+          const item = buildSessionItem(session);
+          sessionList.appendChild(item);
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Lỗi khi tải danh sách cuộc trò chuyện:", error);
+  }
 }
 
 async function loadMessages(sessionId) {
@@ -1032,14 +1276,12 @@ async function loadMessages(sessionId) {
   const messages = await response.json();
   messagesEl.innerHTML = "";
 
-  if (!messages.length) {
-    renderEmpty();
-    return;
-  }
+  if (!messages.length) { renderEmpty(); return; }
 
   messages.forEach((message) => addMessage(message.role, message.content));
 }
 
+// ─── Send message ──────────────────────────────────────────────────────────────
 async function sendMessage(content) {
   // Capture the image data URL BEFORE clearing the pending state
   const imageDataUrl =
@@ -1047,22 +1289,31 @@ async function sendMessage(content) {
       ? imagePreviewThumb.src
       : null;
 
-  // Show the user bubble with image thumbnail + text immediately
+  const hasImage = !!pendingImageFile;
+
+  // Loading label depends on context
+  const loadingLabel = hasImage
+    ? "📷 Đang xem ảnh bạn gửi..."
+    : content.toLowerCase().includes("calo") || content.toLowerCase().includes("dinh dưỡng")
+    ? "🥕 Đang tính dinh dưỡng..."
+    : content.toLowerCase().includes("thực đơn")
+    ? "📅 Đang lên thực đơn..."
+    : "🍳 CookWhat đang tìm món phù hợp...";
+
   addMessage("user", content, { imageDataUrl });
-  addMessage("assistant", "Đang suy nghĩ...", { id: "loadingMessage", loading: true });
+  addMessage("assistant", "", { id: "loadingMessage", loading: true, loadingLabel });
   setLoading(true);
 
-  // Capture and clear pending image before any async work
   const imageFile = pendingImageFile;
   clearPendingImage();
 
   let finalMessage = content;
 
-  // ── VLM preprocessing layer ──────────────────────────────────────────────
+  // ── VLM preprocessing layer ────────────────────────────────────────────────
   if (imageFile) {
     try {
       const loadingEl = document.querySelector("#loadingMessage .loading-label");
-      if (loadingEl) loadingEl.textContent = "Đang phân tích hình ảnh...";
+      if (loadingEl) loadingEl.textContent = "📷 Đang phân tích hình ảnh...";
 
       const formData = new FormData();
       formData.append("image", imageFile);
@@ -1091,7 +1342,7 @@ async function sendMessage(content) {
           : `[Mô tả ảnh]: ${description}`;
       }
 
-      if (loadingEl) loadingEl.textContent = "";
+      if (loadingEl) loadingEl.textContent = "🍳 CookWhat đang tìm món phù hợp...";
     } catch (err) {
       const loading = document.querySelector("#loadingMessage");
       if (loading) loading.remove();
@@ -1101,7 +1352,7 @@ async function sendMessage(content) {
       return;
     }
   }
-  // ── end VLM layer ─────────────────────────────────────────────────────────
+  // ── end VLM layer ──────────────────────────────────────────────────────────
 
   try {
     const response = await fetch("/chat", {
@@ -1117,7 +1368,6 @@ async function sendMessage(content) {
     if (!response.ok) {
       const loading = document.querySelector("#loadingMessage");
       if (loading) loading.remove();
-
       const errorResult = await readChatResponse(response);
       addMessage("assistant", errorResult.text || `Backend trả về lỗi HTTP ${response.status}.`);
       return;
@@ -1146,18 +1396,18 @@ async function sendMessage(content) {
   }
 }
 
+// ─── Speech recognition ───────────────────────────────────────────────────────
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
-let isRecording = false;
+let isRecording  = false;
 
-// ── Image attachment helpers ─────────────────────────────────────────────────
-
+// ─── Image attachment helpers ─────────────────────────────────────────────────
 function clearPendingImage() {
   pendingImageFile = null;
-  if (imagePreviewBar) imagePreviewBar.hidden = true;
-  if (imagePreviewThumb) imagePreviewThumb.src = "";
-  if (imagePreviewName) imagePreviewName.textContent = "";
-  if (imageFileInput) imageFileInput.value = "";
+  if (imagePreviewBar)   imagePreviewBar.hidden = true;
+  if (imagePreviewThumb) imagePreviewThumb.src  = "";
+  if (imagePreviewName)  imagePreviewName.textContent = "";
+  if (imageFileInput)    imageFileInput.value   = "";
   if (imageUploadButton) imageUploadButton.classList.remove("has-image");
 }
 
@@ -1165,18 +1415,15 @@ function attachPendingImage(file) {
   if (!file) return;
   pendingImageFile = file;
 
-  // Show thumbnail preview
   const reader = new FileReader();
-  reader.onload = (e) => {
-    if (imagePreviewThumb) imagePreviewThumb.src = e.target.result;
-  };
+  reader.onload = (e) => { if (imagePreviewThumb) imagePreviewThumb.src = e.target.result; };
   reader.readAsDataURL(file);
 
   if (imagePreviewName) {
     const shortName = file.name.length > 28 ? file.name.slice(0, 25) + "…" : file.name;
     imagePreviewName.textContent = shortName;
   }
-  if (imagePreviewBar) imagePreviewBar.hidden = false;
+  if (imagePreviewBar)   imagePreviewBar.hidden = false;
   if (imageUploadButton) imageUploadButton.classList.add("has-image");
 }
 
@@ -1192,14 +1439,10 @@ if (imageUploadButton && imageFileInput) {
 }
 
 if (imageRemoveButton) {
-  imageRemoveButton.addEventListener("click", () => {
-    clearPendingImage();
-    input.focus();
-  });
+  imageRemoveButton.addEventListener("click", () => { clearPendingImage(); input.focus(); });
 }
 
-// ── Drag-and-drop onto the composer ──────────────────────────────────────────
-// Use a counter to avoid flickering when pointer moves over child elements.
+// ─── Drag-and-drop onto the composer ──────────────────────────────────────────
 let dragEnterCount = 0;
 
 form.addEventListener("dragenter", (e) => {
@@ -1217,10 +1460,7 @@ form.addEventListener("dragover", (e) => {
 
 form.addEventListener("dragleave", () => {
   dragEnterCount--;
-  if (dragEnterCount <= 0) {
-    dragEnterCount = 0;
-    form.classList.remove("drag-over");
-  }
+  if (dragEnterCount <= 0) { dragEnterCount = 0; form.classList.remove("drag-over"); }
 });
 
 form.addEventListener("drop", (e) => {
@@ -1228,26 +1468,17 @@ form.addEventListener("drop", (e) => {
   dragEnterCount = 0;
   form.classList.remove("drag-over");
   if (isSending) return;
-
-  const file = Array.from(e.dataTransfer?.files || []).find((f) =>
-    f.type.startsWith("image/")
-  );
-  if (file) {
-    attachPendingImage(file);
-    input.focus();
-  }
+  const file = Array.from(e.dataTransfer?.files || []).find((f) => f.type.startsWith("image/"));
+  if (file) { attachPendingImage(file); input.focus(); }
 });
 
-// ── Paste image from clipboard ────────────────────────────────────────────────
+// ─── Paste image from clipboard ───────────────────────────────────────────────
 document.addEventListener("paste", (e) => {
   if (isSending) return;
-
   const items = Array.from(e.clipboardData?.items || []);
   const imageItem = items.find((item) => item.type.startsWith("image/"));
   if (!imageItem) return;
 
-  // Only intercept if the paste isn't inside a text field that has text selected
-  // (allow normal text paste to work unaffected)
   const activeEl = document.activeElement;
   const isTextInput =
     activeEl &&
@@ -1264,9 +1495,7 @@ document.addEventListener("paste", (e) => {
   }
 });
 
-// ── end image attachment helpers ─────────────────────────────────────────────
-
-
+// ─── Speech Recognition ───────────────────────────────────────────────────────
 if (SpeechRecognition && micButton) {
   recognition = new SpeechRecognition();
   recognition.lang = "vi-VN";
@@ -1284,23 +1513,14 @@ if (SpeechRecognition && micButton) {
 
   recognition.addEventListener("result", (event) => {
     let interimText = "";
-    let finalText = "";
-
+    let finalText   = "";
     for (const result of event.results) {
-      if (result.isFinal) {
-        finalText += result[0].transcript;
-      } else {
-        interimText += result[0].transcript;
-      }
+      if (result.isFinal) finalText  += result[0].transcript;
+      else                interimText += result[0].transcript;
     }
-
     const base = input.value.slice(0, interimStart);
-    if (finalText) {
-      input.value = base + finalText;
-      interimStart = input.value.length;
-    } else {
-      input.value = base + interimText;
-    }
+    if (finalText) { input.value = base + finalText; interimStart = input.value.length; }
+    else           { input.value = base + interimText; }
     autoResizeInput();
   });
 
@@ -1318,37 +1538,51 @@ if (SpeechRecognition && micButton) {
     if (event.error !== "aborted") {
       const messages = {
         "not-allowed": "Vui lòng cấp quyền micro cho trang.",
-        "no-speech": "Không nghe thấy giọng nói.",
-        network: "Lỗi mạng khi nhận dạng giọng nói.",
+        "no-speech":   "Không nghe thấy giọng nói.",
+        network:       "Lỗi mạng khi nhận dạng giọng nói.",
       };
       showToast(messages[event.error] || `Lỗi nhận dạng: ${event.error}`);
     }
   });
 
   micButton.addEventListener("click", () => {
-    if (isRecording) {
-      recognition.stop();
-      return;
-    }
-    
+    if (isRecording) { recognition.stop(); return; }
     interimStart = input.value.length;
-    try {
-      recognition.start();
-    } catch {
-      // Ignore repeated starts from quick double-clicks.
-    }
+    try { recognition.start(); } catch { /* ignore repeated starts */ }
   });
 } else if (micButton) {
   micButton.style.display = "none";
 }
 
+// ─── Quick Actions ────────────────────────────────────────────────────────────
+if (quickActions) {
+  quickActions.addEventListener("click", (e) => {
+    const btn = e.target.closest(".quick-action-btn");
+    if (!btn || isSending) return;
+
+    const action = btn.dataset.action;
+    const prompt = btn.dataset.prompt;
+
+    if (action === "upload-image") {
+      if (imageFileInput) imageFileInput.click();
+      input.focus();
+      return;
+    }
+
+    if (prompt) {
+      input.value = prompt;
+      autoResizeInput();
+      input.focus();
+    }
+  });
+}
+
+// ─── Form submit ──────────────────────────────────────────────────────────────
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   if (isSending) return;
 
   const content = input.value.trim();
-
-  // Require either text content or a pending image (or both)
   if (!content && !pendingImageFile) return;
 
   input.value = "";
@@ -1364,30 +1598,22 @@ input.addEventListener("keydown", (event) => {
   }
 });
 
+// ─── Global event handlers ────────────────────────────────────────────────────
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".session-item")) {
-    closeSessionMenu();
-  }
+  if (!event.target.closest(".session-item")) closeSessionMenu();
 });
 
 document.addEventListener("scroll", closeSessionMenu, true);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-
-  if (deleteModal && !deleteModal.hidden) {
-    closeDeleteModal();
-    return;
-  }
-
+  if (deleteModal && !deleteModal.hidden) { closeDeleteModal(); return; }
   closeSessionMenu();
   setSidebarOpen(false);
 });
 
 deleteModal?.addEventListener("click", (event) => {
-  if (event.target?.dataset?.dismiss === "true") {
-    closeDeleteModal();
-  }
+  if (event.target?.dataset?.dismiss === "true") closeDeleteModal();
 });
 
 deleteModalCancel?.addEventListener("click", closeDeleteModal);
@@ -1400,9 +1626,7 @@ deleteModalConfirm?.addEventListener("click", async () => {
   closeSessionMenu();
 
   try {
-    await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
-      method: "DELETE",
-    });
+    await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
 
     if (session.id === currentSessionId) {
       setCurrentSession(crypto.randomUUID());
@@ -1426,25 +1650,14 @@ newChatButton.addEventListener("click", () => {
   input.focus();
 });
 
-openSidebar?.addEventListener("click", () => {
-  setSidebarOpen(true);
-});
+openSidebar?.addEventListener("click", () => setSidebarOpen(true));
+closeSidebar?.addEventListener("click", () => setSidebarOpen(false));
 
-closeSidebar?.addEventListener("click", () => {
-  setSidebarOpen(false);
-});
-
-setCurrentSession(currentSessionId);
-renderEmpty();
-setSidebarOpen(false);
-loadMessages(currentSessionId);
-loadSessions();
-
-// ── Dark mode ───────────────────────────────────────────────────────────
+// ─── Dark mode ────────────────────────────────────────────────────────────────
 const themeToggleButton = document.querySelector("#themeToggleButton");
-const themeIcon = document.querySelector("#themeIcon");
+const themeIcon         = document.querySelector("#themeIcon");
 
-const SUN_PATH = `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`;
+const SUN_PATH  = `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`;
 const MOON_PATH = `<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`;
 
 function applyTheme(dark) {
@@ -1457,9 +1670,8 @@ function applyTheme(dark) {
   localStorage.setItem("cookwhat_theme", dark ? "dark" : "light");
 }
 
-// Init from saved preference or system preference
 (function initTheme() {
-  const saved = localStorage.getItem("cookwhat_theme");
+  const saved       = localStorage.getItem("cookwhat_theme");
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   applyTheme(saved ? saved === "dark" : prefersDark);
 })();
@@ -1473,3 +1685,10 @@ function setSidebarOpen(open) {
   openSidebar?.setAttribute("aria-hidden", open ? "true" : "false");
   closeSidebar?.setAttribute("aria-hidden", open ? "false" : "true");
 }
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+setCurrentSession(currentSessionId);
+renderEmpty();
+setSidebarOpen(false);
+loadMessages(currentSessionId);
+loadSessions();
