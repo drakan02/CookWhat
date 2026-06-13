@@ -1193,11 +1193,12 @@ button, textarea { font: inherit; }
   max-width: 100%;
   overflow-x: auto;
   margin: 12px 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .message-row.assistant .bubble table {
   width: 100%;
-  min-width: 480px;
+  min-width: 600px;
   border-collapse: collapse;
   font-size: 13.5px;
   line-height: 1.45;
@@ -1209,6 +1210,14 @@ button, textarea { font: inherit; }
   border: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+  word-break: normal;
+  word-wrap: normal;
+  overflow-wrap: normal;
+}
+
+.message-row.assistant .bubble th:first-child,
+.message-row.assistant .bubble td:first-child {
+  white-space: nowrap;
 }
 
 .message-row.assistant .bubble th {
