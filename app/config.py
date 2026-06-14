@@ -8,6 +8,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DATABASE_URL = os.getenv("DATABASE_URL")
+USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() in ("true", "1", "yes")
 
 def validate_config() -> None:
     """Validate critical configuration on startup."""

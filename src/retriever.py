@@ -17,15 +17,17 @@ Orchestrator cho hybrid retrieval pipeline:
 Đây là file DUY NHẤT mà main.py cần import thay cho src.vectordb.search.
 """
 
+import os
 from src.bm25_index import bm25_search
 from src.reranker   import rerank
 from src.vectordb   import search as dense_search
 
 # ---------- Config ----------
-DENSE_CANDIDATES  = 7   # số candidates lấy từ dense search
-SPARSE_CANDIDATES = 7   # số candidates lấy từ BM25
+DENSE_CANDIDATES  = 5   # số candidates lấy từ dense search
+SPARSE_CANDIDATES = 5   # số candidates lấy từ BM25
 RRF_K             = 60   # hằng số RRF, thường dùng 60
 NER_BONUS_WEIGHT  = 0.3  # trọng số của NER overlap bonus
+USE_RERANKER      = os.getenv("USE_RERANKER", "true").lower() in ("true", "1", "yes")
 
 
 # ---------- NER overlap ----------
@@ -141,21 +143,26 @@ def hybrid_search(
     query: str,
     ingredients: list[str] | None = None,
     top_k: int = 5,
+    use_reranker: bool | None = None,
 ) -> list[dict]:
     """
     Hybrid retrieval: Dense + BM25 + NER boost → RRF → Rerank.
 
     Args:
-        query       : câu query (thường là ", ".join(ingredients))
-        ingredients : list nguyên liệu đã extract, dùng cho NER boost
-                      Nếu None thì NER bonus = 0
-        top_k       : số kết quả cuối cùng trả về (giống top_k cũ)
+    query : câu query (thường là ", ".join(ingredients))
+    ingredients : list nguyên liệu đã extract, dùng cho NER boost
+    Nếu None thì NER bonus = 0
+    top_k : số kết quả cuối cùng trả về (giống top_k cũ)
+    use_reranker: Bật/tắt reranker. Nếu None thì lấy từ biến cấu hình hệ thống (USE_RERANKER)
 
     Returns:
-        list[dict] top_k, mỗi dict có keys:
+    list[dict] top_k, mỗi dict có keys:
           id, title, url, score, document, metadata, rerank_score
-        (format tương thích với vectordb.search() cũ)
+    (format tương thích với vectordb.search() cũ)
     """
+    if use_reranker is None:
+        use_reranker = USE_RERANKER
+
     ingredients = ingredients or []
 
     # --- Bước 1: Dense search ---
@@ -178,14 +185,18 @@ def hybrid_search(
     print(f"[retriever] Sau fusion: {len(fused)} unique candidates")
 
     # --- Bước 4: Rerank top-k ---
-    num_rerank = min(len(fused), (SPARSE_CANDIDATES+DENSE_CANDIDATES)//2)
-    candidates_for_rerank = fused[:num_rerank]
-    print(f"[retriever] Reranking {len(candidates_for_rerank)} candidates...")
-    final_results = rerank(
-        query=query,
-        candidates=candidates_for_rerank,
-        top_k=top_k,
-    )
+    if use_reranker:
+        num_rerank = min(len(fused), (SPARSE_CANDIDATES+DENSE_CANDIDATES)//2)
+        candidates_for_rerank = fused[:num_rerank]
+        print(f"[retriever] Reranking {len(candidates_for_rerank)} candidates...")
+        final_results = rerank(
+            query=query,
+            candidates=candidates_for_rerank,
+            top_k=top_k,
+        )
+    else:
+        print("[retriever] Reranking is disabled. Returning RRF fusion candidates directly.")
+        final_results = fused[:top_k]
 
     print(f"[retriever] Trả về {len(final_results)} kết quả cuối.")
 
@@ -205,12 +216,14 @@ if __name__ == "__main__":
     parser.add_argument("query",                      help="Câu query")
     parser.add_argument("--ingredients", nargs="*",   help="Danh sách nguyên liệu")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--disable-reranker", action="store_true", help="Tắt reranker")
     args = parser.parse_args()
 
     results = hybrid_search(
         query=args.query,
         ingredients=args.ingredients or [],
         top_k=args.top_k,
+        use_reranker=not args.disable_reranker,
     )
 
     print(f"\n{'='*60}")
